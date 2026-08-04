@@ -10,6 +10,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      TDENGINE_GORM_TEST_ENDPOINT: root:taosdata@ws(127.0.0.1:6041)
 
     services:
       tdengine:
@@ -19,7 +21,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
         uses: actions/setup-go@v6

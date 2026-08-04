@@ -9,12 +9,23 @@ import (
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
 	"gorm.io/gorm"
 	"math/rand"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
+func integrationEndpoint(t *testing.T) string {
+	t.Helper()
+	endpoint := strings.TrimRight(os.Getenv("TDENGINE_GORM_TEST_ENDPOINT"), "/")
+	if endpoint == "" {
+		t.Skip("set TDENGINE_GORM_TEST_ENDPOINT to run TDengine integration tests")
+	}
+	return endpoint
+}
+
 func TestDialect(t *testing.T) {
-	dsn := "root:taosdata@/cfg/"
+	dsn := integrationEndpoint(t) + "/"
 
 	rows := []struct {
 		description  string
@@ -118,8 +129,9 @@ func TestDialect(t *testing.T) {
 }
 
 func TestClause(t *testing.T) {
+	endpoint := integrationEndpoint(t)
 	//create db
-	dsnWithoutDB := "root:taosdata@/cfg/?loc=Local"
+	dsnWithoutDB := endpoint + "/?loc=Local"
 	nativeDB, err := sql.Open(DriverName, dsnWithoutDB)
 	if err != nil {
 		t.Errorf("connect db error:%v", err)
@@ -131,7 +143,7 @@ func TestClause(t *testing.T) {
 		return
 	}
 	nativeDB.Close()
-	dsn := "root:taosdata@/cfg/gorm_test?loc=Local"
+	dsn := endpoint + "/gorm_test?loc=Local"
 	db, err := gorm.Open(Open(dsn))
 	if err != nil {
 		t.Errorf("unexpected error:%v", err)
