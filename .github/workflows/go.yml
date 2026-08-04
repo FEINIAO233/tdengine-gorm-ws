@@ -1,29 +1,51 @@
 name: Go
 
-on: [ push ]
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
-    container:
-      image: tdengine/tdengine-beta:latest
-      options: --user root
-      volumes:
-        - /etc/apt/sources.list:/etc/apt/sources.list
+
+    services:
+      tdengine:
+        image: tdengine/tsdb-ee:3.4.1.6
+        ports:
+          - 6041:6041
+        options: >-
+          --health-cmd "taos-check service"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
-      - uses: actions/checkout@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v6
         with:
-          go-version: 1.14
+          go-version: "1.23.x"
+          cache: true
 
-      - name: start taosd
-        run: nohup taosd &
-
-      - name: Install build-essential
-        run: apt-get update && apt-get install -y build-essential curl
+      - name: Verify TDengine WebSocket endpoint
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error \
+              --user root:taosdata \
+              --data "select server_status()" \
+              http://127.0.0.1:6041/rest/sql >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "TDengine WebSocket endpoint did not become ready" >&2
+          exit 1
 
       - name: Build
         run: go build -v ./...
