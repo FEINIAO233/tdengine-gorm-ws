@@ -23,9 +23,10 @@ func TestSetValue(t *testing.T) {
 					}).ADDTagPair("tag2", "string"),
 				},
 				Result: []string{
-					"INSERT INTO tb USING stb(?,?) TAGS(?,?)",
+					"INSERT INTO tb USING stb(tag1,tag2) TAGS(?,?)",
+					"INSERT INTO tb USING stb(tag2,tag1) TAGS(?,?)",
 				},
-				Vars: [][][]interface{}{{{"tag1", "tag2", 1, "string"}, {"tag2", "tag1", "string", 1}}},
+				Vars: [][][]interface{}{{{1, "string"}, {"string", 1}}},
 			},
 		}
 	)

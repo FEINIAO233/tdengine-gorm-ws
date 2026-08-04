@@ -12,13 +12,18 @@ type Using struct {
 func (i Using) Build(builder clause.Builder) {
 	builder.WriteString("USING ")
 	builder.WriteString(i.sTable)
-	var tagNameList = make([]string, 0, len(i.tagParis))
 	var tagValueList = make([]interface{}, 0, len(i.tagParis))
+	builder.WriteByte('(')
+	index := 0
 	for tagName, tagValue := range i.tagParis {
-		tagNameList = append(tagNameList, tagName)
+		builder.WriteString(tagName)
+		if index < len(i.tagParis)-1 {
+			builder.WriteByte(',')
+		}
 		tagValueList = append(tagValueList, tagValue)
+		index++
 	}
-	builder.AddVar(builder, tagNameList)
+	builder.WriteByte(')')
 	builder.WriteString(" TAGS")
 	builder.AddVar(builder, tagValueList)
 }

@@ -60,7 +60,7 @@ func TestDialect(t *testing.T) {
 				DSN:        dsn,
 			},
 			openSuccess:  true,
-			query:        "create table if not exists gorm_test.test (ts timestamp, value double)",
+			query:        "create table if not exists gorm_test.test (ts timestamp, val double)",
 			querySuccess: true,
 		},
 		{
@@ -156,7 +156,7 @@ func TestClause(t *testing.T) {
 			Name:       "ts",
 			ColumnType: create.TimestampType,
 		}, {
-			Name:       "value",
+			Name:       "val",
 			ColumnType: create.DoubleType,
 		}}, []*create.Column{
 			{
@@ -187,8 +187,8 @@ func TestClause(t *testing.T) {
 	t.Run(fmt.Sprintf("insert data"), func(t *testing.T) {
 		//insert data
 		err = db.Table("tb_1").Create(map[string]interface{}{
-			"ts":    now,
-			"value": randValue,
+			"ts":  now,
+			"val": randValue,
 		}).Error
 		if err != nil {
 			t.Errorf("insert data error %v", err)
@@ -202,8 +202,8 @@ func TestClause(t *testing.T) {
 		err = db.Table("tb_2").Clauses(using.SetUsing("stb_1", map[string]interface{}{
 			"tbn": "tb_2",
 		})).Create(map[string]interface{}{
-			"ts":    t1,
-			"value": tRandValue,
+			"ts":  t1,
+			"val": tRandValue,
 		}).Error
 		if err != nil {
 			t.Errorf("create table when insert data error %v", err)
@@ -212,7 +212,7 @@ func TestClause(t *testing.T) {
 	})
 	type Data struct {
 		TS    time.Time
-		Value float64
+		Value float64 `gorm:"column:val"`
 	}
 	t.Run(fmt.Sprintf("find tb_1 data"), func(t *testing.T) {
 		//find tb_1 data
@@ -264,14 +264,14 @@ func TestClause(t *testing.T) {
 			"tbn": "tb_aggregate",
 		})).Create([]map[string]interface{}{
 			{
-				"ts":    t1,
-				"value": v1,
+				"ts":  t1,
+				"val": v1,
 			}, {
-				"ts":    t2,
-				"value": v2,
+				"ts":  t2,
+				"val": v2,
 			}, {
-				"ts":    t3,
-				"value": v3,
+				"ts":  t3,
+				"val": v3,
 			},
 		}).Error
 		if err != nil {
@@ -281,7 +281,7 @@ func TestClause(t *testing.T) {
 	})
 	t.Run(fmt.Sprintf("aggregate query: avg"), func(t *testing.T) {
 		var result []map[string]interface{}
-		err = db.Table("tb_aggregate").Select("avg(value) as v").Where("ts >= ? and ts <= ?", now.Add(time.Second), now.Add(time.Second*3)).Find(&result).Error
+		err = db.Table("tb_aggregate").Select("avg(val) as v").Where("ts >= ? and ts <= ?", now.Add(time.Second), now.Add(time.Second*3)).Find(&result).Error
 		if err != nil {
 			t.Errorf("aggregate query error %v", err)
 			return
@@ -303,7 +303,7 @@ func TestClause(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = db.Table("tb_aggregate").
-			Select("max(value) as v").
+			Select("max(val) as v").
 			Where("ts >= ? and ts <= ?", now.Add(time.Second), now.Add(time.Second*4)).
 			Clauses(
 				window.SetInterval(*windowD),

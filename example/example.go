@@ -16,7 +16,7 @@ import (
 
 type Data struct {
 	TS    time.Time
-	Value float64
+	Value float64 `gorm:"column:val"`
 }
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 	//connect to the database
 	db := connect()
 	//create a sTable
-	//CREATE STABLE IF NOT EXISTS stb_1 (ts TIMESTAMP,value DOUBLE) TAGS(tbn BINARY(64))
+	//CREATE STABLE IF NOT EXISTS stb_1 (ts TIMESTAMP,val DOUBLE) TAGS(tbn BINARY(64))
 	createSTable(db)
 
 	//CREATE TABLE IF NOT EXISTS tb_1 USING stb_1(tbn) TAGS ('tb_1')
@@ -34,12 +34,12 @@ func main() {
 	now := time.Now()
 	randValue := rand.Float64()
 
-	//INSERT INTO tb_1 (ts,value) VALUES ('2021-08-11 09:43:00.041',0.604660)
+	//INSERT INTO tb_1 (ts,val) VALUES ('2021-08-11 09:43:00.041',0.604660)
 	insertData(db, "tb_1", now, randValue)
 	t1 := now.Add(time.Second)
 	randValue2 := rand.Float64()
 
-	//INSERT INTO tb_2 USING stb_1('tbn') TAGS('tb_2') (ts,value) VALUES ('2021-08-11 09:43:01.041',0.940509)
+	//INSERT INTO tb_2 USING stb_1(tbn) TAGS('tb_2') (ts,val) VALUES ('2021-08-11 09:43:01.041',0.940509)
 	automaticTableCreationWhenInsertingData(db, "tb_2", t1, randValue2)
 	//SELECT * FROM tb_1 WHERE ts = '2021-08-11 09:43:00.041'
 	tb1Data := queryData(db, "tb_1", now)
@@ -63,22 +63,22 @@ func main() {
 	v2 := 12
 	v3 := 13
 
-	//INSERT INTO tb_aggregate USING stb_1('tbn') TAGS('tb_aggregate') (ts,value) VALUES ('2021-08-11 09:43:01.041',11),('2021-08-11 09:43:02.041',12),('2021-08-11 09:43:03.041',13)
+	//INSERT INTO tb_aggregate USING stb_1(tbn) TAGS('tb_aggregate') (ts,val) VALUES ('2021-08-11 09:43:01.041',11),('2021-08-11 09:43:02.041',12),('2021-08-11 09:43:03.041',13)
 	automaticTableCreationWhenInsertingMultiData(db, "tb_aggregate", []map[string]interface{}{
 		{
-			"ts":    t1,
-			"value": v1,
+			"ts":  t1,
+			"val": v1,
 		}, {
-			"ts":    t2,
-			"value": v2,
+			"ts":  t2,
+			"val": v2,
 		}, {
-			"ts":    t3,
-			"value": v3,
+			"ts":  t3,
+			"val": v3,
 		},
 	})
 	//aggregate query
-	//SELECT avg(value) as v FROM tb_aggregate WHERE ts >= '2021-08-11 09:43:01.041' and ts <= '2021-08-11 09:43:03.041'
-	resultAvg := aggregateQuery(db, "tb_aggregate", "avg(value) as v", t1, t3, nil)
+	//SELECT avg(val) as v FROM tb_aggregate WHERE ts >= '2021-08-11 09:43:01.041' and ts <= '2021-08-11 09:43:03.041'
+	resultAvg := aggregateQuery(db, "tb_aggregate", "avg(val) as v", t1, t3, nil)
 	expectAvg := []map[string]interface{}{
 		{
 			"v": float64(12),
@@ -91,8 +91,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	//SELECT max(value) as v FROM tb_aggregate WHERE ts >= '2021-08-11 09:43:01.041' and ts <= '2021-08-11 09:43:04.041' INTERVAL(1000000u) FILL (NULL)
-	resultWindowMax := aggregateQuery(db, "tb_aggregate", "max(value) as v", t1, t4, []clause.Expression{
+	//SELECT max(val) as v FROM tb_aggregate WHERE ts >= '2021-08-11 09:43:01.041' and ts <= '2021-08-11 09:43:04.041' INTERVAL(1000000u) FILL (NULL)
+	resultWindowMax := aggregateQuery(db, "tb_aggregate", "max(val) as v", t1, t4, []clause.Expression{
 		window.SetInterval(*windowD),
 		fill.SetFill(fill.FillNull),
 	})
@@ -150,7 +150,7 @@ func createSTable(db *gorm.DB) {
 		Name:       "ts",
 		ColumnType: create.TimestampType,
 	}, {
-		Name:       "value",
+		Name:       "val",
 		ColumnType: create.DoubleType,
 	}}, []*create.Column{
 		{
@@ -179,8 +179,8 @@ func createTableUsingStable(db *gorm.DB) {
 func insertData(db *gorm.DB, tableName string, ts time.Time, value interface{}) {
 	//insert data
 	err := db.Table(tableName).Create(map[string]interface{}{
-		"ts":    ts,
-		"value": value,
+		"ts":  ts,
+		"val": value,
 	}).Error
 	if err != nil {
 		log.Fatalf("insert data error %v", err)
@@ -192,8 +192,8 @@ func automaticTableCreationWhenInsertingData(db *gorm.DB, tableName string, ts t
 	err := db.Table(tableName).Clauses(using.SetUsing("stb_1", map[string]interface{}{
 		"tbn": tableName,
 	})).Create(map[string]interface{}{
-		"ts":    ts,
-		"value": value,
+		"ts":  ts,
+		"val": value,
 	}).Error
 	if err != nil {
 		log.Fatalf("create table when insert data error %v", err)
