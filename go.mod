@@ -1,4 +1,4 @@
-module github.com/FEINIAO233/tdengine_gorm_ws
+module github.com/FEINIAO233/tdengine-gorm-ws
 
 go 1.13
 

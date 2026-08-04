@@ -1,6 +1,7 @@
 package tdengine_gorm
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -8,8 +9,6 @@ import (
 	"gorm.io/gorm/schema"
 	"gorm.io/gorm/utils/tests"
 )
-
-var DB *gorm.DB
 
 /*
 CREATE STABLE IF NOT EXISTS sensors (
@@ -34,20 +33,26 @@ type Sensors struct {
 	Humidity    float64   `gorm:"column:humidity"`                 // 湿度
 }
 
-func init() {
-	var err error
-	DB, err = gorm.Open(Open(":@ws(127.0.0.1:6041)/test?loc=Local"), &gorm.Config{
+func openIntegrationDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := os.Getenv("TDENGINE_GORM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TDENGINE_GORM_TEST_DSN to run TDengine integration tests")
+	}
+	db, err := gorm.Open(Open(dsn), &gorm.Config{
 		NamingStrategy: schema.NamingStrategy{
 			// 禁止使用复数格式创建table name
 			SingularTable: true,
 		},
 	})
 	if err != nil {
-		panic(err)
+		t.Fatalf("open TDengine: %v", err)
 	}
+	return db
 }
 
 func TestCreate(t *testing.T) {
+	db := openIntegrationDB(t)
 	var meter = Sensors{
 		Tbname:      "sensor1",
 		Location:    "beijing",
@@ -56,12 +61,12 @@ func TestCreate(t *testing.T) {
 		Temperature: 25.6,
 		Humidity:    68.3,
 	}
-	if err := DB.Create(&meter).Error; err != nil {
+	if err := db.Create(&meter).Error; err != nil {
 		t.Fatalf("failed to create user, got error %v", err)
 	}
 
 	var result Sensors
-	if err := DB.Select("tbname,*").Where("location = ?", meter.Location).Find(&result).Error; err != nil {
+	if err := db.Select("tbname,*").Where("location = ?", meter.Location).Find(&result).Error; err != nil {
 		t.Fatalf("failed to query user, got error %v", err)
 	}
 
@@ -71,12 +76,13 @@ func TestCreate(t *testing.T) {
 		Type string
 	}
 	var partialResult partialUser
-	if err := DB.Raw("select * from sensors where location = ?", meter.Location).Scan(&partialResult).Error; err != nil {
+	if err := db.Raw("select * from sensors where location = ?", meter.Location).Scan(&partialResult).Error; err != nil {
 		t.Fatalf("failed to query partial, got error %v", err)
 	}
 }
 
 func TestBatchCreate(t *testing.T) {
+	db := openIntegrationDB(t)
 	var sensorses = []Sensors{
 		{Tbname: "sensor1", Location: "beijing", Type: "temp", Ts: time.Now(), Temperature: 25.6, Humidity: 68.3},
 		{Tbname: "sensor2", Location: "shanghai", Type: "temp", Ts: time.Now(), Temperature: 26.1, Humidity: 65.7},
@@ -84,16 +90,16 @@ func TestBatchCreate(t *testing.T) {
 		{Tbname: "sensor4", Location: "shenzhen", Type: "temp", Ts: time.Now(), Temperature: 27.8, Humidity: 72.1},
 	}
 
-	if err := DB.CreateInBatches(&sensorses, 2).Error; err != nil {
+	if err := db.CreateInBatches(&sensorses, 2).Error; err != nil {
 		t.Fatalf("failed to create meters, got error %v", err)
 	}
 
 	var results []Sensors
-	DB.Find(&results)
+	db.Find(&results)
 
 	for _, m := range sensorses {
 		var result Sensors
-		if err := DB.Where("location = ?", m.Location).Find(&result).Error; err != nil {
+		if err := db.Where("location = ?", m.Location).Find(&result).Error; err != nil {
 			t.Fatalf("failed to query meter, got error %v", err)
 		}
 
@@ -102,6 +108,7 @@ func TestBatchCreate(t *testing.T) {
 }
 
 func TestCreateWithMap(t *testing.T) {
+	db := openIntegrationDB(t)
 	var sensors = Sensors{
 		Tbname:      "sensor5",
 		Location:    "chengdu",
@@ -111,7 +118,7 @@ func TestCreateWithMap(t *testing.T) {
 		Humidity:    70.5,
 	}
 
-	if err := DB.Table("sensors").Create(&map[string]interface{}{
+	if err := db.Table("sensors").Create(&map[string]interface{}{
 		"tbname":      sensors.Tbname,
 		"location":    sensors.Location,
 		"type":        sensors.Type,
@@ -123,7 +130,7 @@ func TestCreateWithMap(t *testing.T) {
 	}
 
 	var result Sensors
-	if err := DB.Find(&result, sensors.Location).Error; err != nil {
+	if err := db.Find(&result, sensors.Location).Error; err != nil {
 		t.Fatalf("failed to query meter, got error %v", err)
 	}
 	tests.AssertEqual(t, result, sensors)

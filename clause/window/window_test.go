@@ -2,8 +2,8 @@ package window_test
 
 import (
 	"fmt"
-	"github.com/FEINIAO233/tdengine_gorm_ws/clause/tests"
-	"github.com/FEINIAO233/tdengine_gorm_ws/clause/window"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/tests"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
 	"testing"
 	"time"
 
