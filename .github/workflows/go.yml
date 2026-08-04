@@ -16,11 +16,6 @@ jobs:
         image: tdengine/tsdb-ee:3.4.1.6
         ports:
           - 6041:6041
-        options: >-
-          --health-cmd "taos-check service"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
 
     steps:
       - name: Check out repository
