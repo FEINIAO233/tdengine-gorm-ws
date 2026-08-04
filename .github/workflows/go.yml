@@ -10,14 +10,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      TDENGINE_GORM_TEST_ENDPOINT: root:taosdata@ws(127.0.0.1:6041)
-
-    services:
-      tdengine:
-        image: tdengine/tsdb-ee:3.4.1.6
-        ports:
-          - 6041:6041
 
     steps:
       - name: Check out repository
@@ -28,21 +20,6 @@ jobs:
         with:
           go-version: "1.23.x"
           cache: true
-
-      - name: Verify TDengine WebSocket endpoint
-        shell: bash
-        run: |
-          for attempt in {1..30}; do
-            if curl --fail --silent --show-error \
-              --user root:taosdata \
-              --data "select server_status()" \
-              http://127.0.0.1:6041/rest/sql >/dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "TDengine WebSocket endpoint did not become ready" >&2
-          exit 1
 
       - name: Build
         run: go build -v ./...
