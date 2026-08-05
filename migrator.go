@@ -100,11 +100,19 @@ func (m Migrator) HasColumn(value interface{}, name string) bool {
 			return err
 		}
 		if count == 0 {
+			var description []struct {
+				Field string `gorm:"column:field"`
+			}
 			if err := m.DB.Raw(
-				"SELECT count(*) FROM information_schema.ins_tags WHERE db_name = ? AND stable_name = ? AND tag_name = ?",
-				database, stmt.Table, name,
-			).Scan(&count).Error; err != nil {
+				"DESCRIBE ?", clause.Table{Name: stmt.Table},
+			).Scan(&description).Error; err != nil {
 				return err
+			}
+			for _, field := range description {
+				if strings.EqualFold(field.Field, name) {
+					count = 1
+					break
+				}
 			}
 		}
 		found = count > 0
