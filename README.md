@@ -1,26 +1,32 @@
 # TDengine GORM WebSocket Dialect
 
-面向 TDengine 3.x 的 GORM 方言，通过官方 `driver-go` WebSocket 驱动连接
-`taosAdapter`，不依赖本地 TDengine C 客户端。
+English | [简体中文](./README.zh-CN.md)
 
-## 兼容范围
+A GORM dialect for TDengine 3.x that connects to `taosAdapter` through the
+official `driver-go` WebSocket driver. It does not require the local TDengine C
+client.
+
+## Compatibility
 
 - Go 1.18+
 - GORM 1.31.x
 - `driver-go/v3` 3.8.x
-- TDengine 3.3.6+（CI 覆盖 3.3.8.8 和 3.4.1.6）
+- TDengine 3.3.6+ (CI covers 3.3.8.8 and 3.4.1.6)
 
-当前不支持事务和普通 SQL `UPDATE`。支持安全的增量自动迁移、批量写入和受时间范围保护的删除；超级表、子表以及 TDengine 查询扩展通过本库提供的 clauses 使用。
+Transactions and regular SQL `UPDATE` statements are not supported. The
+dialect supports safe additive migrations, batch inserts, guarded time-range
+deletes, supertables, subtables, tag indexes, and TDengine-specific query
+clauses.
 
-从 `v0.2.0` 升级请阅读 [MIGRATION.md](./MIGRATION.md)。
+See [MIGRATION.md](./MIGRATION.md) when upgrading from `v0.2.0`.
 
-## 安装
+## Installation
 
 ```bash
 go get github.com/FEINIAO233/tdengine-gorm-ws@latest
 ```
 
-## 连接
+## Connection
 
 ```go
 package main
@@ -43,23 +49,28 @@ func main() {
 }
 ```
 
-TLS 连接使用 `wss(host:port)`。用户名或密码包含特殊字符时，应按照
-`driver-go` DSN 规则进行 URL 转义。
+Use `wss(host:port)` for TLS connections. URL-encode usernames or passwords
+containing special characters according to the `driver-go` DSN rules.
 
-默认使用 `driver-go` 的参数插值模式。以下两种写法会保留原始 Go 值并使用预编译语句：
+The default mode uses `driver-go` parameter interpolation. The following
+options preserve raw Go values and use prepared statements:
 
 ```go
 db, err := gorm.Open(tdengine.Open(dsn), &gorm.Config{PrepareStmt: true})
 
-// 或通过 DSN 交给 driver-go 自动预编译
+// Or let driver-go prepare parameters through the DSN.
 dsn = dsn + "&interpolateParams=false"
 ```
 
-也可以构造 `&tdengine.Dialect{DSN: dsn, BindMode: tdengine.BindModePrepared}` 显式指定模式。
+You can also explicitly configure
+`&tdengine.Dialect{DSN: dsn, BindMode: tdengine.BindModePrepared}`.
 
-TDengine 3.3.x 建议保持默认参数插值模式。基于当前 `driver-go` 的 Prepared/Stmt2 集成路径以 TDengine 3.4+ 为兼容基线；CI 只在 3.4.x 执行 Prepared Statement 真实服务测试。
+For TDengine 3.3.x, keep the default interpolation mode. With the current
+`driver-go` Prepared/Stmt2 path, TDengine 3.4+ is the prepared-statement
+compatibility baseline. CI runs prepared-statement integration tests only on
+3.4.x.
 
-## 超级表与子表
+## Supertables and Subtables
 
 ```go
 import (
@@ -86,11 +97,13 @@ err = db.Table("device-1").Clauses(using.SetUsingTags(
 }).Error
 ```
 
-`SetUsing` 仍接受 `map[string]interface{}`，并会按标签名排序以生成稳定 SQL；需要明确标签顺序时使用 `SetUsingTags`。
+`SetUsing` still accepts `map[string]interface{}` and sorts tags by name to
+produce deterministic SQL. Use `SetUsingTags` when tag order must be explicit.
 
-## 批量写入
+## Batch Inserts
 
-直接向 GORM 传入 slice。本方言会生成 TDengine 要求的连续行语法 `VALUES (...) (...)`：
+Pass a slice directly to GORM. The dialect emits TDengine's consecutive row
+syntax, `VALUES (...) (...)`:
 
 ```go
 err := db.Table("device-1").Create([]map[string]interface{}{
@@ -99,9 +112,12 @@ err := db.Table("device-1").Create([]map[string]interface{}{
 }).Error
 ```
 
-## 自动迁移
+## Auto Migration
 
-`AutoMigrate` 只执行安全的增量操作：创建普通表或超级表，以及新增缺失的列和标签。它不会自动删除列、标签或修改类型。结构体的第一个数据字段必须映射为 `TIMESTAMP`，标签使用 `tdengine:"tag"` 标记：
+`AutoMigrate` is additive by design. It creates missing regular tables or
+supertables and adds missing columns and tags. It never drops columns or tags
+and never changes existing types automatically. The first data field must map
+to `TIMESTAMP`; mark tags with `tdengine:"tag"`:
 
 ```go
 type Meter struct {
@@ -113,11 +129,14 @@ type Meter struct {
 err := db.Table("meters").AutoMigrate(&Meter{})
 ```
 
-对已有定义执行显式 DDL 时，可将 `db.Migrator()` 断言为 `tdengine.Migrator`，使用 `AddStableColumn`、`AddStableTag`、`ModifyStableTag`、`RenameStableTag` 等方法。
+For explicit DDL changes, assert `db.Migrator()` to `tdengine.Migrator` and use
+methods such as `AddStableColumn`, `AddStableTag`, `ModifyStableTag`, and
+`RenameStableTag`.
 
-### Tag Index
+### Tag Indexes
 
-TDengine 只允许在超级表的单个 Tag 上建立索引。使用标准 GORM index tag 即可参与 `AutoMigrate`：
+TDengine permits an index on a single supertable tag. Standard GORM index tags
+participate in `AutoMigrate`:
 
 ```go
 type Meter struct {
@@ -126,11 +145,15 @@ type Meter struct {
 }
 ```
 
-`CreateIndex`、`DropIndex`、`HasIndex` 和 `GetIndexes` 已针对 `INFORMATION_SCHEMA.INS_INDEXES` 适配。普通列索引、多列索引、唯一索引和索引重命名会明确返回错误。TDengine 会自动为超级表的第一个 Tag 建立索引；自动迁移检测到同一 Tag 已有索引时不会重复创建。
+`CreateIndex`, `DropIndex`, `HasIndex`, and `GetIndexes` use
+`INFORMATION_SCHEMA.INS_INDEXES`. Indexes on regular columns, multi-column
+indexes, unique indexes, and index renaming return explicit errors. TDengine
+automatically indexes the first tag of a supertable; migration does not create
+a duplicate when the same tag is already indexed.
 
-### 扩展字段类型
+### Extended Data Types
 
-通过 GORM 类型标签可使用 TDengine 3.x 扩展类型：
+Use GORM type tags for TDengine 3.x data types:
 
 ```go
 type ExtendedMetric struct {
@@ -144,16 +167,23 @@ type ExtendedMetric struct {
 }
 ```
 
-迁移器会校验 TDengine 限制：JSON 只能作为 Tag，DECIMAL 和 BLOB 不能作为 Tag，每张表最多一个 BLOB 字段。
+The migrator enforces relevant TDengine restrictions: JSON is tag-only,
+DECIMAL and BLOB cannot be tags, and a table can contain at most one BLOB
+column.
 
-DECIMAL 需要 TDengine 3.3.6+，BLOB 和带列过滤的 `COUNT_WINDOW` 需要 TDengine 3.3.7+。
-写入 VARBINARY/BLOB 的原始 `[]byte` 时应启用 `PrepareStmt` 或 `BindModePrepared`，避免把二进制内容当作插值字符串处理。
+DECIMAL requires TDengine 3.3.6+. BLOB and column-filtered `COUNT_WINDOW`
+require TDengine 3.3.7+. Enable `PrepareStmt` or `BindModePrepared` when writing
+raw `[]byte` values to VARBINARY or BLOB columns so binary data is not handled
+as an interpolated string.
 
-## 更新与删除
+## Updates and Deletes
 
-TDengine 没有普通行级 `UPDATE`。`db.Update` / `db.Updates` 会返回 `ErrUpdateNotSupported`；更新数据应重新插入相同时间戳。
+TDengine does not provide regular row-level `UPDATE`. GORM `Update` and
+`Updates` return `ErrUpdateNotSupported`; update a row by inserting the same
+timestamp again.
 
-普通 GORM `Delete` 会返回 `ErrDeleteNotSupported`，避免误发不可逆删除。按时间范围删除时使用：
+Generic GORM `Delete` returns `ErrDeleteNotSupported` to guard against
+irreversible deletes. Use a bounded time range instead:
 
 ```go
 start := time.Now().Add(-time.Hour)
@@ -161,29 +191,32 @@ end := time.Now()
 err := tdengine.DeleteTimeRange(db, "device-1", &start, &end).Error
 ```
 
-开始时间包含、结束时间不包含；两端可有一端为 `nil`，但不能同时为空。
+The start is inclusive and the end is exclusive. Either bound may be `nil`,
+but they cannot both be `nil`.
 
-## TDengine 查询扩展
+## TDengine Query Extensions
 
-本库提供以下 clauses：
+The library provides clauses for:
 
 - `CREATE TABLE` / `CREATE STABLE`
 - `USING ... TAGS`
-- `INTERVAL`、`SESSION`、`STATE_WINDOW`、`EVENT_WINDOW`、`COUNT_WINDOW`
+- `INTERVAL`, `SESSION`, `STATE_WINDOW`, `EVENT_WINDOW`, and `COUNT_WINDOW`
 - `PARTITION BY`
-- INTERP 查询的 `RANGE` / `EVERY`
+- `RANGE` / `EVERY` for INTERP queries
 - `FILL`
 - `SLIMIT` / `SOFFSET`
 
-完整示例见 [example/example.go](./example/example.go)。
+See [example/example.go](./example/example.go) for complete examples.
 
-## 集成测试
+## Integration Tests
 
-启动 TDengine 和 taosAdapter 后设置不包含数据库名的 WebSocket endpoint：
+Start TDengine and taosAdapter, then set a WebSocket endpoint without a
+database name:
 
 ```powershell
 $env:TDENGINE_GORM_TEST_ENDPOINT='root:taosdata@ws(127.0.0.1:6041)'
 go test -v -count=1 -run 'Integration$' .
 ```
 
-测试会创建临时数据库，并在结束时自动删除。GitHub Actions 会使用 TDengine 3.3.8.8 和 3.4.1.6 执行同一套测试。
+The tests create and remove temporary databases automatically. GitHub Actions
+runs the same suite against TDengine 3.3.8.8 and 3.4.1.6.
