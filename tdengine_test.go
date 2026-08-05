@@ -129,7 +129,7 @@ func TestTDengine3Integration(t *testing.T) {
 	}
 
 	var first measurement
-	if err := db.Table("device-1").Where("note = ?", "O'Reilly").Take(&first).Error; err != nil {
+	if err := db.Table("select").Where("tbname = ? AND note = ?", "device-1", "O'Reilly").Take(&first).Error; err != nil {
 		t.Fatalf("query escaped string: %v", err)
 	}
 	if first.Value != 12.5 || first.Note != "O'Reilly" || first.Location != "north'west" || first.Group != 7 {
@@ -137,7 +137,7 @@ func TestTDengine3Integration(t *testing.T) {
 	}
 
 	var second measurement
-	if err := db.Table("device-2").Where("ts = ?", secondTimestamp).Take(&second).Error; err != nil {
+	if err := db.Table("select").Where("tbname = ? AND ts = ?", "device-2", secondTimestamp).Take(&second).Error; err != nil {
 		t.Fatalf("query automatically created subtable: %v", err)
 	}
 	if second.Value != 18.25 || second.Note != "automatic" || second.Location != "south" || second.Group != 8 {
