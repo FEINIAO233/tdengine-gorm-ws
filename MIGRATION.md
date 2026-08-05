@@ -51,6 +51,26 @@ root:taosdata@ws(127.0.0.1:6041)/database?timezone=Asia%2FShanghai
 
 类型修改、删除和标签重命名必须通过 `tdengine.Migrator` 的显式方法执行并自行评估数据影响。
 
+新增超级表 Tag Index 迁移支持：
+
+- `gorm:"index:index_name" tdengine:"tag"` 可由 `AutoMigrate` 创建。
+- 支持 `CreateIndex`、`DropIndex`、`HasIndex` 和 `GetIndexes`。
+- 普通列、多列、唯一和表达式索引会明确返回不支持错误。
+- 约束和表重命名不再落入 GORM 通用 SQL，而是明确返回 TDengine 不支持错误。
+
+新增 `VARCHAR`、`VARBINARY`、`GEOMETRY`、`DECIMAL`、`BLOB` 和 JSON Tag 的类型生成及迁移校验。
+
+## 查询扩展
+
+新增以下 TDengine clauses：
+
+- `partition.Columns` / `partition.Expressions`
+- `window.SetEventWindow`
+- `window.SetCountWindow`
+- `interp.SetRange` / `interp.SetEvery`
+
+这些 clauses 会按照 `PARTITION BY -> RANGE/EVERY -> WINDOW -> FILL` 的 TDengine SQL 顺序生成。
+
 ## 更新与删除
 
 - 普通 GORM `Update` / `Updates` 现在明确返回 `ErrUpdateNotSupported`。TDengine 的更新语义是重新插入相同时间戳。

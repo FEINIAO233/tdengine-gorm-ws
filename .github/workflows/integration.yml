@@ -12,9 +12,13 @@ permissions:
 jobs:
   integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tdengine-version: ["3.3.8.8", "3.4.1.6"]
     services:
       tdengine:
-        image: tdengine/tsdb-ee:3.4.1.6
+        image: tdengine/tsdb:${{ matrix.tdengine-version }}
         ports:
           - 6041:6041
     env:

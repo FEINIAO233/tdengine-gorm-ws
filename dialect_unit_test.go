@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/partition"
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/using"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
 	"github.com/taosdata/driver-go/v3/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -178,6 +180,21 @@ func TestTDengineBatchValuesSQL(t *testing.T) {
 	}
 }
 
+func TestAdvancedQueryClauseOrder(t *testing.T) {
+	db := openDryRunDB(t, nil)
+	result := db.Table("metrics").Clauses(
+		partition.Columns("location"),
+		window.SetCountWindow(10).SetCountSliding(5),
+	).Select("location, count(*) AS total").Find(&[]map[string]interface{}{})
+	if result.Error != nil {
+		t.Fatalf("build advanced query: %v", result.Error)
+	}
+	const expected = "SELECT location, count(*) AS total FROM `metrics` PARTITION BY `location` COUNT_WINDOW(10,5)"
+	if result.Statement.SQL.String() != expected {
+		t.Fatalf("expected %q, got %q", expected, result.Statement.SQL.String())
+	}
+}
+
 func TestUnsignedDataTypes(t *testing.T) {
 	dialect := Dialect{}
 	tests := []struct {
@@ -194,6 +211,32 @@ func TestUnsignedDataTypes(t *testing.T) {
 		field := &schema.Field{DataType: schema.Uint, Size: test.size}
 		if actual := dialect.DataTypeOf(field); actual != test.expected {
 			t.Fatalf("size %d: expected %q, got %q", test.size, test.expected, actual)
+		}
+	}
+}
+
+func TestExtendedDataTypes(t *testing.T) {
+	type extendedTypes struct {
+		TS       time.Time
+		Text     string `gorm:"type:VARCHAR;size:128"`
+		Binary   []byte `gorm:"type:VARBINARY;size:256"`
+		Decimal  string `gorm:"type:DECIMAL;precision:18;scale:2"`
+		Geometry string `gorm:"type:GEOMETRY;size:512"`
+		Payload  []byte `gorm:"type:BLOB"`
+	}
+	db := openDryRunDB(t, nil)
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(&extendedTypes{}); err != nil {
+		t.Fatalf("parse extended model: %v", err)
+	}
+	expected := map[string]string{
+		"Text": "VARCHAR(128)", "Binary": "VARBINARY(256)", "Decimal": "DECIMAL(18,2)",
+		"Geometry": "GEOMETRY(512)", "Payload": "BLOB",
+	}
+	for name, dataType := range expected {
+		field := stmt.Schema.LookUpField(name)
+		if actual := (Dialect{}).DataTypeOf(field); actual != dataType {
+			t.Fatalf("%s: expected %q, got %q", name, dataType, actual)
 		}
 	}
 }

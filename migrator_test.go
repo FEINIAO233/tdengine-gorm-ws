@@ -6,11 +6,32 @@ import (
 	"time"
 
 	createclause "github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
+	"gorm.io/gorm"
 )
 
 type invalidMigrationModel struct {
 	Value float64
 	TS    time.Time
+}
+
+type validIndexModel struct {
+	TS       time.Time
+	Location string `gorm:"index:idx_location" tdengine:"tag"`
+}
+
+type invalidIndexModel struct {
+	TS    time.Time
+	Value float64 `gorm:"index:idx_value"`
+}
+
+type invalidJSONColumnModel struct {
+	TS      time.Time
+	Payload string `gorm:"type:JSON"`
+}
+
+type invalidDecimalTagModel struct {
+	TS    time.Time
+	Price string `gorm:"type:DECIMAL;precision:18;scale:2" tdengine:"tag"`
 }
 
 func TestMigratorRequiresTimestampFirst(t *testing.T) {
@@ -21,11 +42,50 @@ func TestMigratorRequiresTimestampFirst(t *testing.T) {
 	}
 }
 
+func TestTagIndexValidation(t *testing.T) {
+	db := openDryRunDB(t, nil)
+	for _, test := range []struct {
+		model interface{}
+		err   error
+	}{{&validIndexModel{}, nil}, {&invalidIndexModel{}, ErrTagIndexOnly}} {
+		stmt := &gorm.Statement{DB: db}
+		if err := stmt.Parse(test.model); err != nil {
+			t.Fatalf("parse index model: %v", err)
+		}
+		err := validateModelIndexes(stmt.Schema)
+		if !errors.Is(err, test.err) {
+			t.Fatalf("expected %v, got %v", test.err, err)
+		}
+	}
+}
+
 func TestValidateDataColumns(t *testing.T) {
 	if err := validateDataColumns(nil); !errors.Is(err, ErrNoDataColumns) {
 		t.Fatalf("expected ErrNoDataColumns, got %v", err)
 	}
 	if err := validateDataColumns([]*createclause.Column{{Name: "ts", ColumnType: "timestamp(6)"}}); err != nil {
 		t.Fatalf("expected timestamp precision to be accepted: %v", err)
+	}
+}
+
+func TestExtendedTypeValidation(t *testing.T) {
+	db := openDryRunDB(t, nil)
+	for _, model := range []interface{}{&invalidJSONColumnModel{}, &invalidDecimalTagModel{}} {
+		if err := db.Table("invalid_types").Migrator().CreateTable(model); err == nil {
+			t.Fatalf("expected TDengine type validation to reject %T", model)
+		}
+	}
+}
+
+func TestUnsupportedMigratorOperationsAreExplicit(t *testing.T) {
+	migrator := openDryRunDB(t, nil).Migrator()
+	if err := migrator.CreateConstraint(&validIndexModel{}, "fk_invalid"); !errors.Is(err, ErrConstraintsUnsupported) {
+		t.Fatalf("expected ErrConstraintsUnsupported, got %v", err)
+	}
+	if err := migrator.RenameTable("old_metrics", "new_metrics"); !errors.Is(err, ErrRenameTableUnsupported) {
+		t.Fatalf("expected ErrRenameTableUnsupported, got %v", err)
+	}
+	if migrator.HasConstraint(&validIndexModel{}, "fk_invalid") {
+		t.Fatal("TDengine must not report GORM constraints")
 	}
 }

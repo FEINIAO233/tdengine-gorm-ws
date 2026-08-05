@@ -1,14 +1,18 @@
 package window
 
 import (
-	"gorm.io/gorm/clause"
+	"errors"
 	"strconv"
+
+	"gorm.io/gorm/clause"
 )
 
 const (
 	SESSION = iota + 1
 	STATE
 	INTERVAL
+	EVENT
+	COUNT
 )
 
 //[SESSION(ts_col, tol_val)]
@@ -22,6 +26,31 @@ type Window struct {
 	duration    *Duration
 	offset      *Duration
 	sliding     *Duration
+	start       clause.Expression
+	end         clause.Expression
+	count       uint64
+	countSlide  uint64
+	columns     []string
+}
+
+// SetEventWindow creates EVENT_WINDOW START WITH ... END WITH .... Use
+// clause.Expr for conditions so values remain parameterized.
+func SetEventWindow(start, end clause.Expression) Window {
+	return Window{windowType: EVENT, start: start, end: end}
+}
+
+// SetCountWindow creates COUNT_WINDOW(count[, columns...]). The count must be
+// at least 2. Column filtering is supported by TDengine 3.3.7 and later.
+func SetCountWindow(count uint64, columns ...string) Window {
+	return Window{windowType: COUNT, count: count, columns: columns}
+}
+
+// SetCountSliding sets the row sliding amount for a count window.
+func (sc Window) SetCountSliding(sliding uint64) Window {
+	if sc.windowType == COUNT {
+		sc.countSlide = sliding
+	}
+	return sc
 }
 
 // SetSessionWindow create a session window [SESSION(ts_col, tol_val)]
@@ -84,6 +113,35 @@ func (sc Window) Build(builder clause.Builder) {
 			builder.WriteString(string(sc.sliding.Unit))
 			builder.WriteByte(')')
 		}
+	case EVENT:
+		if sc.start == nil || sc.end == nil {
+			builder.AddError(errors.New("tdengine: event window requires start and end conditions"))
+			return
+		}
+		builder.WriteString("EVENT_WINDOW START WITH ")
+		sc.start.Build(builder)
+		builder.WriteString(" END WITH ")
+		sc.end.Build(builder)
+	case COUNT:
+		if sc.count < 2 {
+			builder.AddError(errors.New("tdengine: count window size must be at least 2"))
+			return
+		}
+		if sc.countSlide > sc.count {
+			builder.AddError(errors.New("tdengine: count window sliding must not exceed its size"))
+			return
+		}
+		builder.WriteString("COUNT_WINDOW(")
+		builder.WriteString(strconv.FormatUint(sc.count, 10))
+		if sc.countSlide > 0 {
+			builder.WriteByte(',')
+			builder.WriteString(strconv.FormatUint(sc.countSlide, 10))
+		}
+		for _, column := range sc.columns {
+			builder.WriteByte(',')
+			builder.WriteQuoted(clause.Column{Name: column})
+		}
+		builder.WriteByte(')')
 	}
 }
 

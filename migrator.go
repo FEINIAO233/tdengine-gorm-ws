@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	ErrTimestampFirst = errors.New("tdengine: the first data column must be TIMESTAMP")
-	ErrNoDataColumns  = errors.New("tdengine: a table requires at least one data column")
+	ErrTimestampFirst         = errors.New("tdengine: the first data column must be TIMESTAMP")
+	ErrNoDataColumns          = errors.New("tdengine: a table requires at least one data column")
+	ErrConstraintsUnsupported = errors.New("tdengine: GORM constraints are not supported")
+	ErrRenameTableUnsupported = errors.New("tdengine: renaming tables through GORM is not supported")
 )
 
 // Migrator implements the subset of GORM migration operations that maps to
@@ -26,6 +28,20 @@ var (
 type Migrator struct {
 	migrator.Migrator
 	d Dialect
+}
+
+type tdTableType struct {
+	schema   string
+	name     string
+	typeName string
+	comment  sql.NullString
+}
+
+func (table tdTableType) Schema() string { return table.schema }
+func (table tdTableType) Name() string   { return table.name }
+func (table tdTableType) Type() string   { return table.typeName }
+func (table tdTableType) Comment() (string, bool) {
+	return table.comment.String, table.comment.Valid
 }
 
 func (m Migrator) FullDataTypeOf(field *schema.Field) clause.Expr {
@@ -83,6 +99,44 @@ func (m Migrator) GetTables() ([]string, error) {
 	return result, nil
 }
 
+func (m Migrator) TableType(value interface{}) (result gorm.TableType, err error) {
+	err = m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		database := m.CurrentDatabase()
+		var stable struct {
+			Name    string         `gorm:"column:stable_name"`
+			Comment sql.NullString `gorm:"column:table_comment"`
+		}
+		if queryErr := m.DB.Raw(
+			"SELECT stable_name, table_comment FROM information_schema.ins_stables WHERE db_name = ? AND stable_name = ?",
+			database, stmt.Table,
+		).Scan(&stable).Error; queryErr != nil {
+			return queryErr
+		}
+		if stable.Name != "" {
+			result = tdTableType{schema: database, name: stable.Name, typeName: "SUPER TABLE", comment: stable.Comment}
+			return nil
+		}
+
+		var table struct {
+			Name    string         `gorm:"column:table_name"`
+			Type    string         `gorm:"column:type"`
+			Comment sql.NullString `gorm:"column:table_comment"`
+		}
+		if queryErr := m.DB.Raw(
+			"SELECT table_name, type, table_comment FROM information_schema.ins_tables WHERE db_name = ? AND table_name = ?",
+			database, stmt.Table,
+		).Scan(&table).Error; queryErr != nil {
+			return queryErr
+		}
+		if table.Name == "" {
+			return fmt.Errorf("tdengine: table %s does not exist", stmt.Table)
+		}
+		result = tdTableType{schema: database, name: table.Name, typeName: table.Type, comment: table.Comment}
+		return nil
+	})
+	return result, err
+}
+
 func (m Migrator) HasColumn(value interface{}, name string) bool {
 	found := false
 	_ = m.RunWithValue(value, func(stmt *gorm.Statement) error {
@@ -128,8 +182,11 @@ func (m Migrator) CreateTable(values ...interface{}) error {
 				return errors.New("tdengine: failed to parse migration schema")
 			}
 			columns, tags := m.modelColumns(stmt.Schema)
-			if err := validateDataColumns(columns); err != nil {
+			if err := validateModelColumns(columns, tags); err != nil {
 				return fmt.Errorf("%s: %w", stmt.Table, err)
+			}
+			if err := validateModelIndexes(stmt.Schema); err != nil {
+				return err
 			}
 
 			var table *createclause.Table
@@ -138,9 +195,12 @@ func (m Migrator) CreateTable(values ...interface{}) error {
 			} else {
 				table = createclause.NewTable(stmt.Table, true, columns, "", nil)
 			}
-			return m.DB.Table(stmt.Table).
+			if err := m.DB.Table(stmt.Table).
 				Clauses(createclause.NewCreateTableClause([]*createclause.Table{table})).
-				Create(map[string]interface{}{}).Error
+				Create(map[string]interface{}{}).Error; err != nil {
+				return err
+			}
+			return m.createMissingIndexes(value)
 		}); err != nil {
 			return err
 		}
@@ -159,6 +219,13 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 		if err := m.RunWithValue(value, func(stmt *gorm.Statement) error {
 			if stmt.Schema == nil {
 				return errors.New("tdengine: failed to parse migration schema")
+			}
+			columns, tags := m.modelColumns(stmt.Schema)
+			if err := validateModelColumns(columns, tags); err != nil {
+				return fmt.Errorf("%s: %w", stmt.Table, err)
+			}
+			if err := validateModelIndexes(stmt.Schema); err != nil {
+				return err
 			}
 			stable, err := m.isStable(stmt.Table)
 			if err != nil {
@@ -184,7 +251,7 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 					return err
 				}
 			}
-			return nil
+			return m.createMissingIndexes(value)
 		}); err != nil {
 			return err
 		}
@@ -209,6 +276,9 @@ func (m Migrator) AddColumn(value interface{}, name string) error {
 			return err
 		}
 		column := m.columnDefinition(field)
+		if err := validateColumnPlacement(column, isTagField(field)); err != nil {
+			return err
+		}
 		if isTagField(field) {
 			if !stable {
 				return fmt.Errorf("tdengine: cannot add a tag to regular table %s", stmt.Table)
@@ -295,17 +365,27 @@ func (m Migrator) DropTable(values ...interface{}) error {
 // in TDengine. Call AlterColumn explicitly after reviewing the change.
 func (m Migrator) MigrateColumn(interface{}, *schema.Field, gorm.ColumnType) error { return nil }
 
+func (m Migrator) MigrateColumnUnique(interface{}, *schema.Field, gorm.ColumnType) error {
+	return nil
+}
+
 func (m Migrator) RenameColumn(interface{}, string, string) error {
 	return errors.New("tdengine: renaming data columns is not supported")
 }
 
 func (m Migrator) RenameIndex(interface{}, string, string) error {
-	return errors.New("tdengine: indexes are not supported")
+	return errors.New("tdengine: tag indexes cannot be renamed; drop and recreate the index")
 }
 
 func (m Migrator) DropConstraint(interface{}, string) error {
-	return errors.New("tdengine: constraints are not supported")
+	return ErrConstraintsUnsupported
 }
+
+func (m Migrator) CreateConstraint(interface{}, string) error { return ErrConstraintsUnsupported }
+
+func (m Migrator) HasConstraint(interface{}, string) bool { return false }
+
+func (m Migrator) RenameTable(interface{}, interface{}) error { return ErrRenameTableUnsupported }
 
 func (m Migrator) AddStableColumn(stable string, column *createclause.Column) error {
 	return m.DB.Exec("ALTER STABLE ? ADD COLUMN ?", clause.Table{Name: stable}, column).Error
@@ -394,6 +474,53 @@ func validateDataColumns(columns []*createclause.Column) error {
 		return ErrTimestampFirst
 	}
 	return nil
+}
+
+func validateModelColumns(columns, tags []*createclause.Column) error {
+	if err := validateDataColumns(columns); err != nil {
+		return err
+	}
+	blobCount := 0
+	for _, column := range columns {
+		if err := validateColumnPlacement(column, false); err != nil {
+			return err
+		}
+		typeName := baseDataType(column.ColumnType)
+		if typeName == createclause.BlobType {
+			blobCount++
+		}
+	}
+	if blobCount > 1 {
+		return errors.New("tdengine: only one BLOB column is allowed per table")
+	}
+	for _, tag := range tags {
+		if err := validateColumnPlacement(tag, true); err != nil {
+			return err
+		}
+	}
+	if len(tags) > 128 {
+		return errors.New("tdengine: a supertable supports at most 128 tags")
+	}
+	return nil
+}
+
+func validateColumnPlacement(column *createclause.Column, tag bool) error {
+	typeName := baseDataType(column.ColumnType)
+	if !tag && typeName == createclause.JSONType {
+		return fmt.Errorf("tdengine: JSON field %s must be a tag", column.Name)
+	}
+	if tag && (typeName == createclause.DecimalType || typeName == createclause.BlobType) {
+		return fmt.Errorf("tdengine: %s is not supported for tag %s", typeName, column.Name)
+	}
+	return nil
+}
+
+func baseDataType(dataType string) string {
+	dataType = strings.ToUpper(strings.TrimSpace(dataType))
+	if index := strings.IndexByte(dataType, '('); index >= 0 {
+		dataType = dataType[:index]
+	}
+	return strings.TrimSpace(dataType)
 }
 
 // ColumnTypes reads TDengine's native metadata instead of the MySQL-style

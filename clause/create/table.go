@@ -83,6 +83,10 @@ const (
 	NCharType     = "NCHAR"
 	VarcharType   = "VARCHAR"
 	VarBinaryType = "VARBINARY"
+	JSONType      = "JSON"
+	GeometryType  = "GEOMETRY"
+	DecimalType   = "DECIMAL"
+	BlobType      = "BLOB"
 )
 
 // Build renders a TDengine column definition. Implementing clause.Expression
@@ -91,7 +95,7 @@ func (c *Column) Build(builder clause.Builder) {
 	builder.WriteQuoted(clause.Column{Name: c.Name})
 	builder.WriteByte(' ')
 	builder.WriteString(c.ColumnType)
-	if c.ColumnType == NCharType || c.ColumnType == BinaryType || c.ColumnType == VarcharType || c.ColumnType == VarBinaryType {
+	if c.ColumnType == NCharType || c.ColumnType == BinaryType || c.ColumnType == VarcharType || c.ColumnType == VarBinaryType || c.ColumnType == GeometryType {
 		builder.WriteByte('(')
 		builder.WriteString(strconv.FormatUint(c.Length, 10))
 		builder.WriteByte(')')

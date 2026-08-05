@@ -180,6 +180,10 @@ func TestNewDurationFromTimeDuration(t *testing.T) {
 			tests.CheckBuildClauses(t, result.Clauses, result.Result, result.Vars)
 		})
 	}
+	nanoseconds, err := window.NewDurationFromTimeDuration(500 * time.Nanosecond)
+	if err != nil || nanoseconds.Value != 500 || nanoseconds.Unit != window.Nanosecond {
+		t.Fatalf("expected 500b, got %+v, %v", nanoseconds, err)
+	}
 }
 
 // ParseDuration

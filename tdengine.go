@@ -57,7 +57,7 @@ func (dialect Dialect) Initialize(db *gorm.DB) (err error) {
 	db.DisableForeignKeyConstraintWhenMigrating = true
 	callbacks.RegisterDefaultCallbacks(db, &callbacks.Config{
 		LastInsertIDReversed: true,
-		QueryClauses:         []string{"SELECT", "FROM", "WHERE", "WINDOW", "FILL", "GROUP BY", "ORDER BY", "SLIMIT", "LIMIT"},
+		QueryClauses:         []string{"SELECT", "FROM", "WHERE", "PARTITION BY", "RANGE", "EVERY", "WINDOW", "FILL", "GROUP BY", "ORDER BY", "SLIMIT", "LIMIT"},
 		CreateClauses:        []string{"CREATE TABLE", "INSERT", "USING", "VALUES", "ON CONFLICT"},
 	})
 	db.Callback().Create().Replace("gorm:create", dialect.Create)
@@ -276,6 +276,27 @@ func (dialect Dialect) Explain(sql string, vars ...interface{}) string {
 }
 
 func (dialect Dialect) DataTypeOf(field *schema.Field) string {
+	explicitType := string(field.DataType)
+	switch strings.ToUpper(explicitType) {
+	case "VARCHAR", "BINARY", "NCHAR", "VARBINARY", "GEOMETRY":
+		size := field.Size
+		if size == 0 {
+			size = 64
+		}
+		return fmt.Sprintf("%s(%d)", strings.ToUpper(explicitType), size)
+	case "DECIMAL":
+		precision := field.Precision
+		if precision == 0 {
+			precision = 18
+		}
+		if field.Scale > 0 {
+			return fmt.Sprintf("DECIMAL(%d,%d)", precision, field.Scale)
+		}
+		return fmt.Sprintf("DECIMAL(%d)", precision)
+	case "JSON", "BLOB":
+		return strings.ToUpper(explicitType)
+	}
+
 	switch field.DataType {
 	case schema.Bool:
 		return "bool"

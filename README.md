@@ -8,7 +8,7 @@
 - Go 1.18+
 - GORM 1.31.x
 - `driver-go/v3` 3.8.x
-- TDengine 3.3.6+（CI 基线为 3.4.1.6）
+- TDengine 3.3.6+（CI 覆盖 3.3.8.8 和 3.4.1.6）
 
 当前不支持事务和普通 SQL `UPDATE`。支持安全的增量自动迁移、批量写入和受时间范围保护的删除；超级表、子表以及 TDengine 查询扩展通过本库提供的 clauses 使用。
 
@@ -113,6 +113,40 @@ err := db.Table("meters").AutoMigrate(&Meter{})
 
 对已有定义执行显式 DDL 时，可将 `db.Migrator()` 断言为 `tdengine.Migrator`，使用 `AddStableColumn`、`AddStableTag`、`ModifyStableTag`、`RenameStableTag` 等方法。
 
+### Tag Index
+
+TDengine 只允许在超级表的单个 Tag 上建立索引。使用标准 GORM index tag 即可参与 `AutoMigrate`：
+
+```go
+type Meter struct {
+	TS       time.Time `gorm:"column:ts"`
+	Location string    `gorm:"index:idx_meter_location" tdengine:"tag"`
+}
+```
+
+`CreateIndex`、`DropIndex`、`HasIndex` 和 `GetIndexes` 已针对 `INFORMATION_SCHEMA.INS_INDEXES` 适配。普通列索引、多列索引、唯一索引和索引重命名会明确返回错误。TDengine 会自动为超级表的第一个 Tag 建立索引；自动迁移检测到同一 Tag 已有索引时不会重复创建。
+
+### 扩展字段类型
+
+通过 GORM 类型标签可使用 TDengine 3.x 扩展类型：
+
+```go
+type ExtendedMetric struct {
+	TS       time.Time
+	Name     string `gorm:"type:VARCHAR;size:128"`
+	Raw      []byte `gorm:"type:VARBINARY;size:256"`
+	Price    string `gorm:"type:DECIMAL;precision:18;scale:2"`
+	Geometry string `gorm:"type:GEOMETRY;size:512"`
+	Payload  []byte `gorm:"type:BLOB"`
+	Metadata string `gorm:"type:JSON" tdengine:"tag"`
+}
+```
+
+迁移器会校验 TDengine 限制：JSON 只能作为 Tag，DECIMAL 和 BLOB 不能作为 Tag，每张表最多一个 BLOB 字段。
+
+DECIMAL 需要 TDengine 3.3.6+，BLOB 和带列过滤的 `COUNT_WINDOW` 需要 TDengine 3.3.7+。
+写入 VARBINARY/BLOB 的原始 `[]byte` 时应启用 `PrepareStmt` 或 `BindModePrepared`，避免把二进制内容当作插值字符串处理。
+
 ## 更新与删除
 
 TDengine 没有普通行级 `UPDATE`。`db.Update` / `db.Updates` 会返回 `ErrUpdateNotSupported`；更新数据应重新插入相同时间戳。
@@ -133,7 +167,9 @@ err := tdengine.DeleteTimeRange(db, "device-1", &start, &end).Error
 
 - `CREATE TABLE` / `CREATE STABLE`
 - `USING ... TAGS`
-- `INTERVAL`、`SESSION`、`STATE_WINDOW`
+- `INTERVAL`、`SESSION`、`STATE_WINDOW`、`EVENT_WINDOW`、`COUNT_WINDOW`
+- `PARTITION BY`
+- INTERP 查询的 `RANGE` / `EVERY`
 - `FILL`
 - `SLIMIT` / `SOFFSET`
 
@@ -148,4 +184,4 @@ $env:TDENGINE_GORM_TEST_ENDPOINT='root:taosdata@ws(127.0.0.1:6041)'
 go test -v -count=1 -run 'Integration$' .
 ```
 
-测试会创建临时数据库，并在结束时自动删除。GitHub Actions 也会使用 TDengine 3.4.1.6 执行同一套测试。
+测试会创建临时数据库，并在结束时自动删除。GitHub Actions 会使用 TDengine 3.3.8.8 和 3.4.1.6 执行同一套测试。

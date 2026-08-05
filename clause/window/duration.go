@@ -8,8 +8,9 @@ import (
 
 type UnitType string
 
-//u(微秒)、a(毫秒)、s(秒)、m(分)、h(小时)、d(天)、w(周) n(自然月) 和 y(自然年)
+// b(ns), u(us), a(ms), s, m, h, d, w, n(month), q(quarter), y(year).
 const (
+	Nanosecond  UnitType = "b"
 	Microsecond UnitType = "u"
 	Millisecond UnitType = "a"
 	Second      UnitType = "s"
@@ -18,10 +19,12 @@ const (
 	Day         UnitType = "d"
 	Week        UnitType = "w"
 	Month       UnitType = "n"
+	Quarter     UnitType = "q"
 	Year        UnitType = "y"
 )
 
 var durationMap = map[UnitType]struct{}{
+	Nanosecond:  {},
 	Microsecond: {},
 	Millisecond: {},
 	Second:      {},
@@ -30,6 +33,7 @@ var durationMap = map[UnitType]struct{}{
 	Day:         {},
 	Week:        {},
 	Month:       {},
+	Quarter:     {},
 	Year:        {},
 }
 
@@ -42,10 +46,10 @@ func NewDurationFromTimeDuration(duration time.Duration) (*Duration, error) {
 	if duration <= 0 {
 		return nil, errors.New("duration does not allow negative numbers")
 	}
-	return &Duration{
-		Value: uint64(duration.Microseconds()),
-		Unit:  Microsecond,
-	}, nil
+	if duration%time.Microsecond == 0 {
+		return &Duration{Value: uint64(duration.Microseconds()), Unit: Microsecond}, nil
+	}
+	return &Duration{Value: uint64(duration.Nanoseconds()), Unit: Nanosecond}, nil
 }
 
 func ParseDuration(durationString string) (*Duration, error) {

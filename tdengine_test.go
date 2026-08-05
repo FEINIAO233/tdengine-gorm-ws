@@ -10,8 +10,13 @@ import (
 	"time"
 
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/fill"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/interp"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/partition"
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/using"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func integrationEndpoint(t *testing.T) string {
@@ -166,6 +171,57 @@ func TestTDengine3Integration(t *testing.T) {
 		t.Fatalf("expected 2 batch rows, got %d", batchCount)
 	}
 
+	var partitions []struct {
+		Table string `gorm:"column:tbname"`
+		Total int64  `gorm:"column:total"`
+	}
+	if err := db.Table("select").Clauses(partition.Columns("tbname")).
+		Select("tbname, count(*) AS total").Scan(&partitions).Error; err != nil {
+		t.Fatalf("partition query: %v", err)
+	}
+	if len(partitions) < 2 {
+		t.Fatalf("expected at least two table partitions, got %v", partitions)
+	}
+
+	var countWindows []struct {
+		Total int64 `gorm:"column:total"`
+	}
+	if err := db.Table("device-1").Clauses(window.SetCountWindow(2)).
+		Select("count(*) AS total").Scan(&countWindows).Error; err != nil {
+		t.Fatalf("count window query: %v", err)
+	}
+	if len(countWindows) != 2 {
+		t.Fatalf("expected two count windows, got %v", countWindows)
+	}
+
+	var eventWindows []struct {
+		Total int64 `gorm:"column:total"`
+	}
+	if err := db.Table("device-1").Clauses(window.SetEventWindow(
+		clause.Expr{SQL: "val >= ?", Vars: []interface{}{20}},
+		clause.Expr{SQL: "val >= ?", Vars: []interface{}{21}},
+	)).Select("count(*) AS total").Scan(&eventWindows).Error; err != nil {
+		t.Fatalf("event window query: %v", err)
+	}
+	if len(eventWindows) != 1 || eventWindows[0].Total != 2 {
+		t.Fatalf("unexpected event windows: %v", eventWindows)
+	}
+
+	var interpolated []struct {
+		Value float64 `gorm:"column:val"`
+	}
+	interpolationEnd := batchStart.Add(time.Second)
+	if err := db.Table("device-1").Clauses(
+		interp.SetRange(timestamp, interpolationEnd),
+		interp.SetEvery(window.Duration{Value: 1, Unit: window.Second}),
+		fill.SetFill(fill.FillLinear),
+	).Select("interp(val) AS val").Scan(&interpolated).Error; err != nil {
+		t.Fatalf("interpolation query: %v", err)
+	}
+	if len(interpolated) != 4 {
+		t.Fatalf("expected four interpolated points, got %v", interpolated)
+	}
+
 	preparedTable := create.NewTable("device-prepared", true, nil, "select", map[string]interface{}{
 		"location": "prepared",
 		"group":    9,
@@ -219,7 +275,7 @@ type autoMetricV2 struct {
 	Value    float64   `gorm:"column:val"`
 	Note     string    `gorm:"column:note;type:NCHAR(64)"`
 	Location string    `gorm:"column:location;type:NCHAR(64)" tdengine:"tag"`
-	GroupID  int       `gorm:"column:group_id" tdengine:"tag"`
+	GroupID  int       `gorm:"column:group_id;index:idx_auto_group" tdengine:"tag"`
 }
 
 type plainMetricV1 struct {
@@ -254,6 +310,40 @@ func TestTDengineMigratorIntegration(t *testing.T) {
 		if !db.Migrator().HasColumn(stableName, name) {
 			t.Fatalf("expected migrated column or tag %q", name)
 		}
+	}
+	if !db.Table(stableName).Migrator().HasIndex(&autoMetricV2{}, "idx_auto_group") {
+		t.Fatal("expected AutoMigrate to create tag index")
+	}
+	indexes, err := db.Table(stableName).Migrator().GetIndexes(&autoMetricV2{})
+	if err != nil {
+		t.Fatalf("get tag indexes: %v", err)
+	}
+	foundIndex := false
+	for _, index := range indexes {
+		if index.Name() == "idx_auto_group" {
+			foundIndex = true
+			break
+		}
+	}
+	if !foundIndex {
+		t.Fatalf("expected idx_auto_group in indexes: %v", indexes)
+	}
+	stableMigrator := db.Table(stableName).Migrator()
+	if err := stableMigrator.DropIndex(&autoMetricV2{}, "idx_auto_group"); err != nil {
+		t.Fatalf("drop tag index: %v", err)
+	}
+	if stableMigrator.HasIndex(&autoMetricV2{}, "idx_auto_group") {
+		t.Fatal("expected tag index to be dropped")
+	}
+	if err := stableMigrator.CreateIndex(&autoMetricV2{}, "idx_auto_group"); err != nil {
+		t.Fatalf("recreate tag index: %v", err)
+	}
+	tableType, err := db.Migrator().TableType(stableName)
+	if err != nil {
+		t.Fatalf("get supertable type: %v", err)
+	}
+	if tableType.Name() != stableName || tableType.Type() != "SUPER TABLE" {
+		t.Fatalf("unexpected supertable type: name=%q type=%q", tableType.Name(), tableType.Type())
 	}
 	columnTypes, err := db.Migrator().ColumnTypes(stableName)
 	if err != nil {
