@@ -23,7 +23,12 @@ func integrationEndpoint(t *testing.T) string {
 	return endpoint
 }
 
-func openIntegrationDatabase(t *testing.T) *gorm.DB {
+type integrationDatabase struct {
+	DB  *gorm.DB
+	DSN string
+}
+
+func openIntegrationDatabase(t *testing.T) integrationDatabase {
 	t.Helper()
 	endpoint := integrationEndpoint(t)
 	server, err := sql.Open(DriverName, endpoint+"/")
@@ -52,7 +57,8 @@ func openIntegrationDatabase(t *testing.T) *gorm.DB {
 	}
 	t.Cleanup(func() { _, _ = server.Exec("DROP DATABASE IF EXISTS " + database) })
 
-	db, err := gorm.Open(Open(endpoint+"/"+database+"?timezone=UTC"), &gorm.Config{})
+	dsn := endpoint + "/" + database + "?timezone=UTC"
+	db, err := gorm.Open(Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open integration database: %v", err)
 	}
@@ -61,11 +67,11 @@ func openIntegrationDatabase(t *testing.T) *gorm.DB {
 		t.Fatalf("get integration connection pool: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	return db
+	return integrationDatabase{DB: db, DSN: dsn}
 }
 
 func TestDialectIntegration(t *testing.T) {
-	db := openIntegrationDatabase(t)
+	db := openIntegrationDatabase(t).DB
 
 	var value int
 	if err := db.Raw("SELECT 1").Scan(&value).Error; err != nil {
@@ -80,7 +86,8 @@ func TestDialectIntegration(t *testing.T) {
 }
 
 func TestTDengine3Integration(t *testing.T) {
-	db := openIntegrationDatabase(t)
+	integration := openIntegrationDatabase(t)
+	db := integration.DB
 
 	stable := create.NewSTable("select", true, []*create.Column{
 		{Name: "ts", ColumnType: create.TimestampType},
@@ -142,5 +149,143 @@ func TestTDengine3Integration(t *testing.T) {
 	}
 	if second.Value != 18.25 || second.Note != "automatic" || second.Location != "south" || second.Group != 8 {
 		t.Fatalf("unexpected second row: %+v", second)
+	}
+
+	batchStart := secondTimestamp.Add(time.Second)
+	if err := db.Table("device-1").Create([]map[string]interface{}{
+		{"ts": batchStart, "val": 20.5, "note": "batch-1"},
+		{"ts": batchStart.Add(time.Second), "val": 21.5, "note": "batch-2"},
+	}).Error; err != nil {
+		t.Fatalf("batch insert: %v", err)
+	}
+	var batchCount int64
+	if err := db.Table("device-1").Where("ts >= ?", batchStart).Count(&batchCount).Error; err != nil {
+		t.Fatalf("count batch rows: %v", err)
+	}
+	if batchCount != 2 {
+		t.Fatalf("expected 2 batch rows, got %d", batchCount)
+	}
+
+	preparedTable := create.NewTable("device-prepared", true, nil, "select", map[string]interface{}{
+		"location": "prepared",
+		"group":    9,
+	})
+	if err := db.Table("device-prepared").Clauses(create.NewCreateTableClause([]*create.Table{preparedTable})).Create(map[string]interface{}{}).Error; err != nil {
+		t.Fatalf("create prepared subtable: %v", err)
+	}
+	preparedDB, err := gorm.Open(Open(integration.DSN), &gorm.Config{PrepareStmt: true})
+	if err != nil {
+		t.Fatalf("open prepared database: %v", err)
+	}
+	preparedSQLDB, err := preparedDB.DB()
+	if err != nil {
+		t.Fatalf("get prepared connection pool: %v", err)
+	}
+	t.Cleanup(func() { _ = preparedSQLDB.Close() })
+	preparedTimestamp := batchStart.Add(2 * time.Second)
+	if err := preparedDB.Table("device-prepared").Create(map[string]interface{}{
+		"ts": preparedTimestamp, "val": 30.5, "note": "prepared O'Reilly",
+	}).Error; err != nil {
+		t.Fatalf("prepared insert: %v", err)
+	}
+	var prepared measurement
+	if err := preparedDB.Table("select").Where("tbname = ? AND note = ?", "device-prepared", "prepared O'Reilly").Take(&prepared).Error; err != nil {
+		t.Fatalf("prepared query: %v", err)
+	}
+	if prepared.Value != 30.5 || prepared.Note != "prepared O'Reilly" {
+		t.Fatalf("unexpected prepared row: %+v", prepared)
+	}
+
+	deleteEnd := batchStart.Add(2 * time.Second)
+	if err := DeleteTimeRange(db, "device-1", &batchStart, &deleteEnd).Error; err != nil {
+		t.Fatalf("delete time range: %v", err)
+	}
+	if err := db.Table("device-1").Where("ts >= ? AND ts < ?", batchStart, deleteEnd).Count(&batchCount).Error; err != nil {
+		t.Fatalf("count deleted range: %v", err)
+	}
+	if batchCount != 0 {
+		t.Fatalf("expected deleted time range to be empty, got %d rows", batchCount)
+	}
+}
+
+type autoMetricV1 struct {
+	TS       time.Time `gorm:"column:ts"`
+	Value    float64   `gorm:"column:val"`
+	Location string    `gorm:"column:location;type:NCHAR(64)" tdengine:"tag"`
+}
+
+type autoMetricV2 struct {
+	TS       time.Time `gorm:"column:ts"`
+	Value    float64   `gorm:"column:val"`
+	Note     string    `gorm:"column:note;type:NCHAR(64)"`
+	Location string    `gorm:"column:location;type:NCHAR(64)" tdengine:"tag"`
+	GroupID  int       `gorm:"column:group_id" tdengine:"tag"`
+}
+
+type plainMetricV1 struct {
+	TS    time.Time `gorm:"column:ts"`
+	Value float64   `gorm:"column:val"`
+}
+
+type plainMetricV2 struct {
+	TS    time.Time `gorm:"column:ts"`
+	Value float64   `gorm:"column:val"`
+	Note  string    `gorm:"column:note;type:NCHAR(64)"`
+}
+
+func TestTDengineMigratorIntegration(t *testing.T) {
+	db := openIntegrationDatabase(t).DB
+	const stableName = "auto_metrics"
+
+	if err := db.Table(stableName).AutoMigrate(&autoMetricV1{}); err != nil {
+		t.Fatalf("create supertable with AutoMigrate: %v", err)
+	}
+	if !db.Migrator().HasTable(stableName) {
+		t.Fatal("expected AutoMigrate to create supertable")
+	}
+	if !db.Migrator().HasColumn(stableName, "location") {
+		t.Fatal("expected migrator to find tag metadata")
+	}
+
+	if err := db.Table(stableName).AutoMigrate(&autoMetricV2{}); err != nil {
+		t.Fatalf("add column and tag with AutoMigrate: %v", err)
+	}
+	for _, name := range []string{"ts", "val", "note", "location", "group_id"} {
+		if !db.Migrator().HasColumn(stableName, name) {
+			t.Fatalf("expected migrated column or tag %q", name)
+		}
+	}
+	columnTypes, err := db.Migrator().ColumnTypes(stableName)
+	if err != nil {
+		t.Fatalf("read TDengine column metadata: %v", err)
+	}
+	if len(columnTypes) < 3 {
+		t.Fatalf("expected at least 3 data columns, got %d", len(columnTypes))
+	}
+
+	const plainTable = "plain_metrics"
+	if err := db.Table(plainTable).AutoMigrate(&plainMetricV1{}); err != nil {
+		t.Fatalf("create regular table with AutoMigrate: %v", err)
+	}
+	if err := db.Table(plainTable).AutoMigrate(&plainMetricV2{}); err != nil {
+		t.Fatalf("add regular table column with AutoMigrate: %v", err)
+	}
+	if !db.Migrator().HasTable(plainTable) || !db.Migrator().HasColumn(plainTable, "note") {
+		t.Fatal("expected regular table and added column in metadata")
+	}
+
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		t.Fatalf("get tables: %v", err)
+	}
+	found := false
+	for _, table := range tables {
+		if table == stableName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %q in table list: %v", stableName, tables)
 	}
 }

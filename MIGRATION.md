@@ -34,6 +34,26 @@ root:taosdata@ws(127.0.0.1:6041)/database?timezone=Asia%2FShanghai
 - 新增 `SetUsingTags`，可以显式控制标签列顺序。
 - `ADDTagPair` 仍可使用，但已弃用，请改用 `AddTag`。
 - 同一个 `CreateTable` clause 中的多个子表会使用 TDengine 批量建表语法。
+- GORM slice 批量写入会生成 TDengine 3.x 的 `VALUES (...) (...)` 语法。
+- 支持 `gorm.Config{PrepareStmt: true}`、`interpolateParams=false` 以及显式 `BindModePrepared`；预编译模式不再预先把字符串转换为 SQL 字面量。
+
+## 自动迁移
+
+现在支持面向 TDengine 的安全增量 `AutoMigrate`：
+
+- 没有 `tdengine:"tag"` 字段时创建普通表。
+- 存在 `tdengine:"tag"` 字段时创建超级表。
+- 已存在的表只新增缺失的普通列或标签。
+- 不自动删除字段，也不自动修改字段类型。
+- 第一个非标签字段必须是 `TIMESTAMP`。
+
+类型修改、删除和标签重命名必须通过 `tdengine.Migrator` 的显式方法执行并自行评估数据影响。
+
+## 更新与删除
+
+- 普通 GORM `Update` / `Updates` 现在明确返回 `ErrUpdateNotSupported`。TDengine 的更新语义是重新插入相同时间戳。
+- 普通 GORM `Delete` 明确返回 `ErrDeleteNotSupported`。
+- 新增 `DeleteTimeRange`，只允许至少带一个时间边界的删除，范围为开始时间包含、结束时间不包含。
 
 ## 测试
 

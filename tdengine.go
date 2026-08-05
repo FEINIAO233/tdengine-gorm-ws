@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/taosdata/driver-go/v3/common"
-	_ "github.com/taosdata/driver-go/v3/taosWS"
+	"github.com/taosdata/driver-go/v3/taosWS"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
 	"gorm.io/gorm/clause"
@@ -20,10 +20,23 @@ import (
 // DriverName is the default driver name for TDengine.
 const DriverName = "taosWS"
 
+// BindMode controls how values are passed to driver-go.
+type BindMode uint8
+
+const (
+	// BindModeAuto follows GORM PrepareStmt and the interpolateParams DSN option.
+	BindModeAuto BindMode = iota
+	// BindModeInterpolate encodes string values as TDengine SQL literals.
+	BindModeInterpolate
+	// BindModePrepared preserves Go values for driver-go prepared statements.
+	BindModePrepared
+)
+
 type Dialect struct {
 	DriverName string
 	DSN        string
 	Conn       gorm.ConnPool
+	BindMode   BindMode
 }
 
 func Open(dsn string) gorm.Dialector {
@@ -48,6 +61,8 @@ func (dialect Dialect) Initialize(db *gorm.DB) (err error) {
 		CreateClauses:        []string{"CREATE TABLE", "INSERT", "USING", "VALUES", "ON CONFLICT"},
 	})
 	db.Callback().Create().Replace("gorm:create", dialect.Create)
+	db.Callback().Update().Replace("gorm:update", dialect.Update)
+	db.Callback().Delete().Replace("gorm:delete", dialect.Delete)
 	if dialect.Conn != nil {
 		db.ConnPool = dialect.Conn
 	} else {
@@ -82,16 +97,41 @@ func (dialect Dialect) ClauseBuilders() map[string]clause.ClauseBuilder {
 			c.Build(builder)
 		},
 		"VALUES": func(c clause.Clause, builder clause.Builder) {
-			if _, ok := c.Expression.(clause.Values); ok {
+			if values, ok := c.Expression.(clause.Values); ok {
 				if stmt, ok := builder.(*gorm.Statement); ok {
 					_, containsCreateTable := stmt.Clauses["CREATE TABLE"]
 					if containsCreateTable {
 						return
 					}
 				}
+				buildValues(values, builder)
+				return
 			}
 			c.Build(builder)
 		},
+	}
+}
+
+func buildValues(values clause.Values, builder clause.Builder) {
+	if len(values.Columns) == 0 {
+		builder.AddError(errors.New("tdengine: DEFAULT VALUES is not supported"))
+		return
+	}
+	builder.WriteByte('(')
+	for index, column := range values.Columns {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteQuoted(column)
+	}
+	builder.WriteString(") VALUES ")
+	for index, row := range values.Values {
+		if index > 0 {
+			builder.WriteByte(' ')
+		}
+		builder.WriteByte('(')
+		builder.AddVar(builder, row...)
+		builder.WriteByte(')')
 	}
 }
 
@@ -108,6 +148,11 @@ func (dialect Dialect) Migrator(db *gorm.DB) gorm.Migrator {
 }
 
 func (dialect Dialect) BindVarTo(writer clause.Writer, stmt *gorm.Statement, v interface{}) {
+	if !dialect.shouldInterpolate(stmt) {
+		writer.WriteByte('?')
+		return
+	}
+
 	value := v
 	if valuer, ok := value.(driver.Valuer); ok {
 		converted, err := valuer.Value()
@@ -177,7 +222,31 @@ func (dialect Dialect) QuoteTo(writer clause.Writer, str string) {
 	writer.WriteByte('`')
 }
 
-func quoteString(value string) []byte {
+func (dialect Dialect) shouldInterpolate(stmt *gorm.Statement) bool {
+	switch dialect.BindMode {
+	case BindModeInterpolate:
+		return true
+	case BindModePrepared:
+		return false
+	}
+	if stmt != nil && stmt.DB != nil && stmt.DB.PrepareStmt {
+		return false
+	}
+	if dialect.DSN != "" {
+		if config, err := taosWS.ParseDSN(dialect.DSN); err == nil {
+			return config.InterpolateParams
+		}
+	}
+	return true
+}
+
+type sqlLiteral string
+
+func (literal sqlLiteral) Value() (driver.Value, error) {
+	return []byte(literal), nil
+}
+
+func quoteString(value string) sqlLiteral {
 	replacer := strings.NewReplacer(
 		`\`, `\\`,
 		`'`, `\'`,
@@ -185,16 +254,23 @@ func quoteString(value string) []byte {
 		"\r", `\r`,
 		"\t", `\t`,
 	)
-	return []byte("'" + replacer.Replace(value) + "'")
+	return sqlLiteral("'" + replacer.Replace(value) + "'")
 }
 
 func (dialect Dialect) Explain(sql string, vars ...interface{}) string {
 	args := make([]driver.NamedValue, len(vars))
+	hasLiteral := false
 	for index, value := range vars {
+		if literal, ok := value.(sqlLiteral); ok {
+			value = []byte(literal)
+			hasLiteral = true
+		}
 		args[index] = driver.NamedValue{Ordinal: index + 1, Value: value}
 	}
-	if explained, err := common.InterpolateParams(sql, args); err == nil {
-		return explained
+	if hasLiteral {
+		if explained, err := common.InterpolateParams(sql, args); err == nil {
+			return explained
+		}
 	}
 	return logger.ExplainSQL(sql, nil, "'", vars...)
 }

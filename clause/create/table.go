@@ -85,7 +85,9 @@ const (
 	VarBinaryType = "VARBINARY"
 )
 
-func (c *Column) build(builder clause.Builder) {
+// Build renders a TDengine column definition. Implementing clause.Expression
+// also lets the migrator reuse the same definition in ALTER statements.
+func (c *Column) Build(builder clause.Builder) {
 	builder.WriteQuoted(clause.Column{Name: c.Name})
 	builder.WriteByte(' ')
 	builder.WriteString(c.ColumnType)
@@ -174,7 +176,7 @@ func buildTable(builder clause.Builder, table *Table, writeCommand bool) {
 	} else {
 		builder.WriteString(" (")
 		for i, column := range table.Column {
-			column.build(builder)
+			column.Build(builder)
 			if i != len(table.Column)-1 {
 				builder.WriteByte(',')
 			}
@@ -184,7 +186,7 @@ func buildTable(builder clause.Builder, table *Table, writeCommand bool) {
 	if table.TableType == STableType {
 		builder.WriteString(" TAGS(")
 		for i, tags := range table.TagColumn {
-			tags.build(builder)
+			tags.Build(builder)
 			if i != len(table.TagColumn)-1 {
 				builder.WriteByte(',')
 			}
