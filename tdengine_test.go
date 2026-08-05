@@ -461,7 +461,7 @@ func TestTDengineMigratorIntegration(t *testing.T) {
 		Comment string `gorm:"column:table_comment"`
 	}
 	if err := db.Raw(
-		"SELECT ttl, table_comment FROM information_schema.ins_tables WHERE db_name = DATABASE() AND table_name = ?",
+		"SELECT `ttl`, table_comment FROM information_schema.ins_tables WHERE db_name = DATABASE() AND table_name = ?",
 		optionTable,
 	).Scan(&optionMetadata).Error; err != nil {
 		t.Fatalf("query table options: %v", err)
