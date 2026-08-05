@@ -2,9 +2,12 @@ package tdengine_gorm
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/taosdata/driver-go/v3/common"
 	_ "github.com/taosdata/driver-go/v3/taosWS"
 	"gorm.io/gorm"
 	"gorm.io/gorm/callbacks"
@@ -105,19 +108,94 @@ func (dialect Dialect) Migrator(db *gorm.DB) gorm.Migrator {
 }
 
 func (dialect Dialect) BindVarTo(writer clause.Writer, stmt *gorm.Statement, v interface{}) {
-	switch v.(type) {
-	case string:
-		writer.WriteString("?")
-	default:
-		writer.WriteByte('?')
+	value := v
+	if valuer, ok := value.(driver.Valuer); ok {
+		converted, err := valuer.Value()
+		if err != nil {
+			stmt.AddError(err)
+		} else {
+			value = converted
+		}
 	}
+
+	// driver-go's interpolator writes strings and byte slices into the SQL
+	// verbatim. Supplying a quoted, escaped byte slice here keeps GORM's usual
+	// parameter API safe and produces valid TDengine string literals.
+	switch value := value.(type) {
+	case string:
+		stmt.Vars[len(stmt.Vars)-1] = quoteString(value)
+	case []byte:
+		stmt.Vars[len(stmt.Vars)-1] = quoteString(string(value))
+	}
+	writer.WriteByte('?')
 }
 
 func (dialect Dialect) QuoteTo(writer clause.Writer, str string) {
-	writer.WriteString(str)
+	var (
+		underQuoted, selfQuoted bool
+		continuousBacktick      int8
+		shiftDelimiter          int8
+	)
+
+	for _, character := range []byte(str) {
+		switch character {
+		case '`':
+			continuousBacktick++
+			if continuousBacktick == 2 {
+				writer.WriteString("``")
+				continuousBacktick = 0
+			}
+		case '.':
+			if continuousBacktick > 0 || !selfQuoted {
+				shiftDelimiter = 0
+				underQuoted = false
+				continuousBacktick = 0
+				writer.WriteByte('`')
+			}
+			writer.WriteByte(character)
+			continue
+		default:
+			if shiftDelimiter-continuousBacktick <= 0 && !underQuoted {
+				writer.WriteByte('`')
+				underQuoted = true
+				if selfQuoted = continuousBacktick > 0; selfQuoted {
+					continuousBacktick--
+				}
+			}
+
+			for ; continuousBacktick > 0; continuousBacktick-- {
+				writer.WriteString("``")
+			}
+			writer.WriteByte(character)
+		}
+		shiftDelimiter++
+	}
+
+	if continuousBacktick > 0 && !selfQuoted {
+		writer.WriteString("``")
+	}
+	writer.WriteByte('`')
+}
+
+func quoteString(value string) []byte {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `\'`,
+		"\n", `\n`,
+		"\r", `\r`,
+		"\t", `\t`,
+	)
+	return []byte("'" + replacer.Replace(value) + "'")
 }
 
 func (dialect Dialect) Explain(sql string, vars ...interface{}) string {
+	args := make([]driver.NamedValue, len(vars))
+	for index, value := range vars {
+		args[index] = driver.NamedValue{Ordinal: index + 1, Value: value}
+	}
+	if explained, err := common.InterpolateParams(sql, args); err == nil {
+		return explained
+	}
 	return logger.ExplainSQL(sql, nil, "'", vars...)
 }
 
@@ -125,7 +203,7 @@ func (dialect Dialect) DataTypeOf(field *schema.Field) string {
 	switch field.DataType {
 	case schema.Bool:
 		return "bool"
-	case schema.Int, schema.Uint:
+	case schema.Int:
 		sqlType := "bigint"
 		switch {
 		case field.Size <= 8:
@@ -134,6 +212,17 @@ func (dialect Dialect) DataTypeOf(field *schema.Field) string {
 			sqlType = "smallint"
 		case field.Size <= 32:
 			sqlType = "int"
+		}
+		return sqlType
+	case schema.Uint:
+		sqlType := "bigint unsigned"
+		switch {
+		case field.Size <= 8:
+			sqlType = "tinyint unsigned"
+		case field.Size <= 16:
+			sqlType = "smallint unsigned"
+		case field.Size <= 32:
+			sqlType = "int unsigned"
 		}
 		return sqlType
 	case schema.Float:

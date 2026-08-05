@@ -401,3 +401,13 @@ func TestNewTable(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateMultipleSubtables(t *testing.T) {
+	createClause := create.NewCreateTableClause([]*create.Table{
+		create.NewTable("t_1", true, nil, "st_1", map[string]interface{}{"tag": 1}),
+		create.NewTable("t_2", true, nil, "st_1", map[string]interface{}{"tag": 2}),
+	})
+	tests.CheckBuildClauses(t, []clause.Interface{createClause}, []string{
+		"CREATE TABLE IF NOT EXISTS t_1 USING st_1(tag) TAGS (?) IF NOT EXISTS t_2 USING st_1(tag) TAGS (?)",
+	}, [][][]interface{}{{{1, 2}}})
+}

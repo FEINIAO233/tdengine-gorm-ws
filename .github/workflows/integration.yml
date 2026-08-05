@@ -1,0 +1,33 @@
+name: TDengine Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      tdengine:
+        image: tdengine/tsdb-ee:3.4.1.6
+        ports:
+          - 6041:6041
+    env:
+      TDENGINE_GORM_TEST_ENDPOINT: root:taosdata@ws(127.0.0.1:6041)
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Run TDengine integration tests
+        run: go test -v -count=1 -run 'Integration$' .

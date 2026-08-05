@@ -1,9 +1,10 @@
 package create
 
 import (
-	"bytes"
-	"gorm.io/gorm/clause"
+	"sort"
 	"strconv"
+
+	"gorm.io/gorm/clause"
 )
 
 type CreateTable struct {
@@ -74,21 +75,25 @@ const (
 	BinaryType    = "BINARY"
 	SmallIntType  = "SMALLINT"
 	TinyIntType   = "TINYINT"
+	UTinyIntType  = "TINYINT UNSIGNED"
+	USmallIntType = "SMALLINT UNSIGNED"
+	UIntType      = "INT UNSIGNED"
+	UBigIntType   = "BIGINT UNSIGNED"
 	BoolType      = "BOOL"
 	NCharType     = "NCHAR"
+	VarcharType   = "VARCHAR"
+	VarBinaryType = "VARBINARY"
 )
 
-func (c *Column) toSql() string {
-	b := bytes.NewBufferString("")
-	b.WriteString(c.Name)
-	b.WriteByte(' ')
-	b.WriteString(c.ColumnType)
-	if c.ColumnType == NCharType || c.ColumnType == BinaryType {
-		b.WriteByte('(')
-		b.WriteString(strconv.FormatUint(c.Length, 10))
-		b.WriteByte(')')
+func (c *Column) build(builder clause.Builder) {
+	builder.WriteQuoted(clause.Column{Name: c.Name})
+	builder.WriteByte(' ')
+	builder.WriteString(c.ColumnType)
+	if c.ColumnType == NCharType || c.ColumnType == BinaryType || c.ColumnType == VarcharType || c.ColumnType == VarBinaryType {
+		builder.WriteByte('(')
+		builder.WriteString(strconv.FormatUint(c.Length, 10))
+		builder.WriteByte(')')
 	}
-	return b.String()
 }
 
 func (CreateTable) Name() string {
@@ -96,7 +101,39 @@ func (CreateTable) Name() string {
 }
 
 func (c CreateTable) Build(builder clause.Builder) {
-	for _, table := range c.tables {
+	if len(c.tables) > 1 && allSubtables(c.tables) {
+		builder.WriteString("CREATE TABLE ")
+		for tableIndex, table := range c.tables {
+			if tableIndex > 0 {
+				builder.WriteByte(' ')
+			}
+			buildTable(builder, table, false)
+		}
+		return
+	}
+
+	for tableIndex, table := range c.tables {
+		if tableIndex > 0 {
+			builder.WriteByte(' ')
+		}
+		buildTable(builder, table, true)
+	}
+}
+
+func allSubtables(tables []*Table) bool {
+	for _, table := range tables {
+		if table == nil || table.TableType != CommonTableType || table.STable == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func buildTable(builder clause.Builder, table *Table, writeCommand bool) {
+	if table == nil {
+		return
+	}
+	if writeCommand {
 		switch table.TableType {
 		case CommonTableType:
 			builder.WriteString("CREATE TABLE ")
@@ -105,46 +142,54 @@ func (c CreateTable) Build(builder clause.Builder) {
 		default:
 			return
 		}
-		if table.IfNotExists {
-			builder.WriteString("IF NOT EXISTS ")
+	}
+	if table.IfNotExists {
+		builder.WriteString("IF NOT EXISTS ")
+	}
+	builder.WriteQuoted(clause.Table{Name: table.Table})
+	if table.TableType == CommonTableType && table.STable != "" {
+		builder.WriteString(" USING ")
+		builder.WriteQuoted(clause.Table{Name: table.STable})
+		tagValueList := make([]interface{}, 0, len(table.Tags))
+		tagNames := make([]string, 0, len(table.Tags))
+		for tag := range table.Tags {
+			tagNames = append(tagNames, tag)
 		}
-		builder.WriteString(table.Table)
-		if table.TableType == CommonTableType && table.STable != "" {
-			builder.WriteString(" USING ")
-			builder.WriteString(table.STable)
-			tagValueList := make([]interface{}, 0, len(table.Tags))
-			index := 0
+		sort.Strings(tagNames)
+		if len(tagNames) > 0 {
 			builder.WriteByte('(')
-			for tag, tagValue := range table.Tags {
-				builder.WriteString(tag)
-				if index != len(table.Tags)-1 {
-					builder.WriteByte(',')
-				}
-				tagValueList = append(tagValueList, tagValue)
-				index += 1
+		}
+		for index, tag := range tagNames {
+			builder.WriteQuoted(clause.Column{Name: tag})
+			if index != len(tagNames)-1 {
+				builder.WriteByte(',')
 			}
-			builder.WriteString(") TAGS ")
-			builder.AddVar(builder, tagValueList)
-		} else {
-			builder.WriteString(" (")
-			for i, column := range table.Column {
-				builder.WriteString(column.toSql())
-				if i != len(table.Column)-1 {
-					builder.WriteByte(',')
-				}
-			}
+			tagValueList = append(tagValueList, table.Tags[tag])
+		}
+		if len(tagNames) > 0 {
 			builder.WriteByte(')')
 		}
-		if table.TableType == STableType {
-			builder.WriteString(" TAGS(")
-			for i, tags := range table.TagColumn {
-				builder.WriteString(tags.toSql())
-				if i != len(table.TagColumn)-1 {
-					builder.WriteByte(',')
-				}
+		builder.WriteString(" TAGS ")
+		builder.AddVar(builder, tagValueList)
+	} else {
+		builder.WriteString(" (")
+		for i, column := range table.Column {
+			column.build(builder)
+			if i != len(table.Column)-1 {
+				builder.WriteByte(',')
 			}
-			builder.WriteByte(')')
 		}
+		builder.WriteByte(')')
+	}
+	if table.TableType == STableType {
+		builder.WriteString(" TAGS(")
+		for i, tags := range table.TagColumn {
+			tags.build(builder)
+			if i != len(table.TagColumn)-1 {
+				builder.WriteByte(',')
+			}
+		}
+		builder.WriteByte(')')
 	}
 }
 

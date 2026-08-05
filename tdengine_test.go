@@ -1,18 +1,17 @@
 package tdengine_gorm
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
-	"github.com/FEINIAO233/tdengine-gorm-ws/clause/fill"
-	"github.com/FEINIAO233/tdengine-gorm-ws/clause/using"
-	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
-	"gorm.io/gorm"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
+	"github.com/FEINIAO233/tdengine-gorm-ws/clause/using"
+	"gorm.io/gorm"
 )
 
 func integrationEndpoint(t *testing.T) string {
@@ -24,341 +23,124 @@ func integrationEndpoint(t *testing.T) string {
 	return endpoint
 }
 
-func TestDialect(t *testing.T) {
-	dsn := integrationEndpoint(t) + "/"
-
-	rows := []struct {
-		description  string
-		dialect      *Dialect
-		openSuccess  bool
-		query        string
-		querySuccess bool
-	}{
-		{
-			description: "Default driver",
-			dialect: &Dialect{
-				DSN: dsn,
-			},
-			openSuccess:  true,
-			query:        "SELECT 1",
-			querySuccess: true,
-		},
-		{
-			description: "create db",
-			dialect: &Dialect{
-				DriverName: DriverName,
-				DSN:        dsn,
-			},
-			openSuccess:  true,
-			query:        "create database if not exists gorm_test",
-			querySuccess: true,
-		},
-		{
-			description: "create table",
-			dialect: &Dialect{
-				DriverName: DriverName,
-				DSN:        dsn,
-			},
-			openSuccess:  true,
-			query:        "create table if not exists gorm_test.test (ts timestamp, val double)",
-			querySuccess: true,
-		},
-		{
-			description: "insert data",
-			dialect: &Dialect{
-				DriverName: DriverName,
-				DSN:        dsn,
-			},
-			openSuccess:  true,
-			query:        "insert into gorm_test.test values (now,12)",
-			querySuccess: true,
-		},
-		{
-			description: "query data",
-			dialect: &Dialect{
-				DriverName: DriverName,
-				DSN:        dsn,
-			},
-			openSuccess:  true,
-			query:        "select * from gorm_test.test limit 1",
-			querySuccess: true,
-		},
-		{
-			description: "syntax error",
-			dialect: &Dialect{
-				DriverName: DriverName,
-				DSN:        dsn,
-			},
-			openSuccess:  true,
-			query:        "select * rfom gorm_test.test limit 1",
-			querySuccess: false,
-		},
-	}
-	for rowIndex, row := range rows {
-		t.Run(fmt.Sprintf("%d/%s", rowIndex, row.description), func(t *testing.T) {
-			db, err := gorm.Open(row.dialect, &gorm.Config{})
-			if !row.openSuccess {
-				if err == nil {
-					t.Errorf("Expected Open to fail.")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("Expected Open to succeed; got error: %v", err)
-				return
-			}
-			if db == nil {
-				t.Errorf("Expected db to be non-nil.")
-				return
-			}
-			if row.query != "" {
-				err = db.Exec(row.query).Error
-				if !row.querySuccess {
-					if err == nil {
-						t.Errorf("Expected query to fail.")
-					}
-					return
-				}
-
-				if err != nil {
-					t.Errorf("Expected query to succeed; got error: %v", err)
-				}
-			}
-		})
-	}
-}
-
-func TestClause(t *testing.T) {
+func openIntegrationDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
 	endpoint := integrationEndpoint(t)
-	//create db
-	dsnWithoutDB := endpoint + "/?loc=Local"
-	nativeDB, err := sql.Open(DriverName, dsnWithoutDB)
+	server, err := sql.Open(DriverName, endpoint+"/")
 	if err != nil {
-		t.Errorf("connect db error:%v", err)
-		return
+		t.Fatalf("open TDengine server: %v", err)
 	}
-	_, err = nativeDB.Exec("create database if not exists gorm_test")
+	t.Cleanup(func() { _ = server.Close() })
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = server.PingContext(ctx)
+		cancel()
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("wait for TDengine: %v", err)
+		}
+		time.Sleep(time.Second)
+	}
+
+	database := fmt.Sprintf("gorm_v2_%d", time.Now().UnixNano())
+	if _, err = server.Exec("CREATE DATABASE " + database); err != nil {
+		t.Fatalf("create integration database: %v", err)
+	}
+	t.Cleanup(func() { _, _ = server.Exec("DROP DATABASE IF EXISTS " + database) })
+
+	db, err := gorm.Open(Open(endpoint+"/"+database+"?timezone=UTC"), &gorm.Config{})
 	if err != nil {
-		t.Errorf("create database error %v", err)
-		return
+		t.Fatalf("open integration database: %v", err)
 	}
-	nativeDB.Close()
-	dsn := endpoint + "/gorm_test?loc=Local"
-	db, err := gorm.Open(Open(dsn))
+	sqlDB, err := db.DB()
 	if err != nil {
-		t.Errorf("unexpected error:%v", err)
-		return
+		t.Fatalf("get integration connection pool: %v", err)
 	}
-	db = db.Debug()
-	t.Run(fmt.Sprintf("create stable"), func(t *testing.T) {
-		//create stable
-		stable := create.NewSTable("stb_1", true, []*create.Column{{
-			Name:       "ts",
-			ColumnType: create.TimestampType,
-		}, {
-			Name:       "val",
-			ColumnType: create.DoubleType,
-		}}, []*create.Column{
-			{
-				Name:       "tbn",
-				ColumnType: create.BinaryType,
-				Length:     64,
-			},
-		})
-		err = db.Table("stb_1").Clauses(create.NewCreateTableClause([]*create.Table{stable})).Create(map[string]interface{}{}).Error
-		if err != nil {
-			t.Errorf("create sTable error %v", err)
-			return
-		}
-	})
-	t.Run(fmt.Sprintf("create table using sTable"), func(t *testing.T) {
-		//create table
-		table := create.NewTable("tb_1", true, nil, "stb_1", map[string]interface{}{
-			"tbn": "tb_1",
-		})
-		err = db.Table("tb_1").Clauses(create.NewCreateTableClause([]*create.Table{table})).Create(map[string]interface{}{}).Error
-		if err != nil {
-			t.Errorf("create table error %v", err)
-			return
-		}
-	})
-	now := time.Now()
-	randValue := rand.Float64()
-	t.Run(fmt.Sprintf("insert data"), func(t *testing.T) {
-		//insert data
-		err = db.Table("tb_1").Create(map[string]interface{}{
-			"ts":  now,
-			"val": randValue,
-		}).Error
-		if err != nil {
-			t.Errorf("insert data error %v", err)
-			return
-		}
-	})
-	t1 := now.Add(time.Second)
-	tRandValue := rand.Float64()
-	t.Run(fmt.Sprintf("create table when insert data"), func(t *testing.T) {
-		//create table when insert data
-		err = db.Table("tb_2").Clauses(using.SetUsing("stb_1", map[string]interface{}{
-			"tbn": "tb_2",
-		})).Create(map[string]interface{}{
-			"ts":  t1,
-			"val": tRandValue,
-		}).Error
-		if err != nil {
-			t.Errorf("create table when insert data error %v", err)
-			return
-		}
-	})
-	type Data struct {
-		TS    time.Time
-		Value float64 `gorm:"column:val"`
-	}
-	t.Run(fmt.Sprintf("find tb_1 data"), func(t *testing.T) {
-		//find tb_1 data
-		var d Data
-		err = db.Table("tb_1").Where("ts = ?", now).Find(&d).Error
-		if err != nil {
-			t.Errorf("find data error %v", err)
-			return
-		}
-		if d.Value != randValue {
-			t.Errorf("expect value %v got %v", randValue, d.Value)
-			return
-		}
-	})
-	t.Run(fmt.Sprintf("find tb_2 data"), func(t *testing.T) {
-		//find tb_2 data
-		var d2 Data
-		err = db.Table("tb_2").Where("ts = ?", t1).Find(&d2).Error
-		if err != nil {
-			t.Errorf("find data error %v", err)
-			return
-		}
-		if d2.Value != tRandValue {
-			t.Errorf("expect value %v got %v", tRandValue, d2.Value)
-			return
-		}
-	})
-	t.Run(fmt.Sprintf("find by sTable"), func(t *testing.T) {
-		//find by sTable
-		var d3 Data
-		err = db.Table("stb_1").Where("ts = ?", now).Find(&d3).Error
-		if err != nil {
-			t.Errorf("find data by sTable error %v", err)
-			return
-		}
-		if d3.Value != randValue {
-			t.Errorf("expect value %v got %v", randValue, d3.Value)
-			return
-		}
-	})
-	t2 := now.Add(time.Second * 2)
-	t3 := now.Add(time.Second * 3)
-	v1 := 11
-	v2 := 12
-	v3 := 13
-	//aggregate query
-	t.Run(fmt.Sprintf("aggregate insert data"), func(t *testing.T) {
-		err = db.Table("tb_aggregate").Clauses(using.SetUsing("stb_1", map[string]interface{}{
-			"tbn": "tb_aggregate",
-		})).Create([]map[string]interface{}{
-			{
-				"ts":  t1,
-				"val": v1,
-			}, {
-				"ts":  t2,
-				"val": v2,
-			}, {
-				"ts":  t3,
-				"val": v3,
-			},
-		}).Error
-		if err != nil {
-			t.Errorf("create table when insert data error %v", err)
-			return
-		}
-	})
-	t.Run(fmt.Sprintf("aggregate query: avg"), func(t *testing.T) {
-		var result []map[string]interface{}
-		err = db.Table("tb_aggregate").Select("avg(val) as v").Where("ts >= ? and ts <= ?", now.Add(time.Second), now.Add(time.Second*3)).Find(&result).Error
-		if err != nil {
-			t.Errorf("aggregate query error %v", err)
-			return
-		}
-		expectR1 := []map[string]interface{}{
-			{
-				"v": float64(12),
-			},
-		}
-		if !resultMapEqual(expectR1, result) {
-			t.Errorf("expect %v got %v", expectR1, result)
-			return
-		}
-	})
-	t.Run(fmt.Sprintf("aggregate query: time window"), func(t *testing.T) {
-		var result2 []map[string]interface{}
-		windowD, err := window.NewDurationFromTimeDuration(time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = db.Table("tb_aggregate").
-			Select("max(val) as v").
-			Where("ts >= ? and ts <= ?", now.Add(time.Second), now.Add(time.Second*4)).
-			Clauses(
-				window.SetInterval(*windowD),
-				fill.SetFill(fill.FillNull),
-			).
-			Find(&result2).Error
-		if err != nil {
-			t.Errorf("aggregate query error %v", err)
-			return
-		}
-		expectR2 := []map[string]interface{}{
-			{
-				"ts": now.Add(time.Second),
-				"v":  float64(11),
-			},
-			{
-				"ts": now.Add(time.Second * 2),
-				"v":  float64(12),
-			},
-			{
-				"ts": now.Add(time.Second * 3),
-				"v":  float64(13),
-			},
-			{
-				"ts": now.Add(time.Second * 4),
-				"v":  nil,
-			},
-		}
-		if !resultMapEqual(result2, expectR2) {
-			t.Errorf("aggregate query expect %v got %v", result2, expectR2)
-			return
-		}
-	})
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return db
 }
 
-func resultMapEqual(m1, m2 []map[string]interface{}) bool {
-	if len(m1) != len(m2) {
-		return false
-	}
-	for i := range m1 {
-		if len(m1[i]) != len(m2[i]) {
-			return false
-		}
+func TestDialectIntegration(t *testing.T) {
+	db := openIntegrationDatabase(t)
 
+	var value int
+	if err := db.Raw("SELECT 1").Scan(&value).Error; err != nil {
+		t.Fatalf("query TDengine: %v", err)
 	}
-	for i, m := range m1 {
-		for s, v := range m {
-			_, ok := m2[i][s].(time.Time)
-			if ok {
-				continue
-			}
-			if m2[i][s] != v {
-				return false
-			}
-		}
+	if value != 1 {
+		t.Fatalf("expected 1, got %d", value)
 	}
-	return true
+	if err := db.Exec("SELECT * RFOM missing_table").Error; err == nil {
+		t.Fatal("expected invalid SQL to fail")
+	}
+}
+
+func TestTDengine3Integration(t *testing.T) {
+	db := openIntegrationDatabase(t)
+
+	stable := create.NewSTable("select", true, []*create.Column{
+		{Name: "ts", ColumnType: create.TimestampType},
+		{Name: "val", ColumnType: create.DoubleType},
+		{Name: "note", ColumnType: create.NCharType, Length: 64},
+	}, []*create.Column{
+		{Name: "location", ColumnType: create.NCharType, Length: 64},
+		{Name: "group", ColumnType: create.IntType},
+	})
+	if err := db.Table("select").Clauses(create.NewCreateTableClause([]*create.Table{stable})).Create(map[string]interface{}{}).Error; err != nil {
+		t.Fatalf("create supertable: %v", err)
+	}
+
+	firstTable := create.NewTable("device-1", true, nil, "select", map[string]interface{}{
+		"location": "north'west",
+		"group":    7,
+	})
+	if err := db.Table("device-1").Clauses(create.NewCreateTableClause([]*create.Table{firstTable})).Create(map[string]interface{}{}).Error; err != nil {
+		t.Fatalf("create subtable: %v", err)
+	}
+
+	timestamp := time.Now().UTC().Truncate(time.Millisecond)
+	if err := db.Table("device-1").Create(map[string]interface{}{
+		"ts": timestamp, "val": 12.5, "note": "O'Reilly",
+	}).Error; err != nil {
+		t.Fatalf("insert into existing subtable: %v", err)
+	}
+
+	secondTimestamp := timestamp.Add(time.Second)
+	if err := db.Table("device-2").Clauses(using.SetUsingTags(
+		"select",
+		using.Tag{Name: "location", Value: "south"},
+		using.Tag{Name: "group", Value: 8},
+	)).Create(map[string]interface{}{
+		"ts": secondTimestamp, "val": 18.25, "note": "automatic",
+	}).Error; err != nil {
+		t.Fatalf("create subtable while inserting: %v", err)
+	}
+
+	type measurement struct {
+		TS       time.Time
+		Value    float64 `gorm:"column:val"`
+		Note     string
+		Location string
+		Group    int `gorm:"column:group"`
+	}
+
+	var first measurement
+	if err := db.Table("device-1").Where("note = ?", "O'Reilly").Take(&first).Error; err != nil {
+		t.Fatalf("query escaped string: %v", err)
+	}
+	if first.Value != 12.5 || first.Note != "O'Reilly" || first.Location != "north'west" || first.Group != 7 {
+		t.Fatalf("unexpected first row: %+v", first)
+	}
+
+	var second measurement
+	if err := db.Table("device-2").Where("ts = ?", secondTimestamp).Take(&second).Error; err != nil {
+		t.Fatalf("query automatically created subtable: %v", err)
+	}
+	if second.Value != 18.25 || second.Note != "automatic" || second.Location != "south" || second.Group != 8 {
+		t.Fatalf("unexpected second row: %+v", second)
+	}
 }

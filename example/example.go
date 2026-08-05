@@ -2,6 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"log"
+	"math/rand"
+	"time"
+
 	"github.com/FEINIAO233/tdengine-gorm-ws"
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/fill"
@@ -9,9 +13,6 @@ import (
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/window"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"log"
-	"math/rand"
-	"time"
 )
 
 type Data struct {
@@ -120,7 +121,7 @@ func main() {
 }
 
 func createDatabase() {
-	dsnWithoutDB := "root:taosdata@/tcp(127.0.0.1:6030)/?loc=Local"
+	dsnWithoutDB := "root:taosdata@ws(127.0.0.1:6041)/?timezone=Asia%2FShanghai"
 	nativeDB, err := sql.Open(tdengine_gorm.DriverName, dsnWithoutDB)
 	if err != nil {
 		log.Fatalf("connect db error:%v", err)
@@ -135,7 +136,7 @@ func createDatabase() {
 }
 
 func connect() *gorm.DB {
-	dsn := "root:taosdata@/tcp(127.0.0.1:6030)/gorm_test?loc=Local"
+	dsn := "root:taosdata@ws(127.0.0.1:6041)/gorm_test?timezone=Asia%2FShanghai"
 	db, err := gorm.Open(tdengine_gorm.Open(dsn))
 	if err != nil {
 		log.Fatalf("unexpected error:%v", err)
