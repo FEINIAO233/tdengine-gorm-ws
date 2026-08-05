@@ -37,6 +37,8 @@ root:taosdata@ws(127.0.0.1:6041)/database?timezone=Asia%2FShanghai
 - GORM slice 批量写入会生成 TDengine 3.x 的 `VALUES (...) (...)` 语法。
 - 支持 `gorm.Config{PrepareStmt: true}`、`interpolateParams=false` 以及显式 `BindModePrepared`；预编译模式不再预先把字符串转换为 SQL 字面量。
 
+TDengine 3.3.x 应继续使用默认插值模式；Prepared/Stmt2 真实服务兼容基线为 TDengine 3.4+。
+
 ## 自动迁移
 
 现在支持面向 TDengine 的安全增量 `AutoMigrate`：

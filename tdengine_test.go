@@ -75,6 +75,19 @@ func openIntegrationDatabase(t *testing.T) integrationDatabase {
 	return integrationDatabase{DB: db, DSN: dsn}
 }
 
+func supportsPreparedStatements(t *testing.T, db *gorm.DB) bool {
+	t.Helper()
+	var version string
+	if err := db.Raw("SELECT SERVER_VERSION()").Scan(&version).Error; err != nil {
+		t.Fatalf("query TDengine server version: %v", err)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
+		t.Fatalf("parse TDengine server version %q: %v", version, err)
+	}
+	return major > 3 || major == 3 && minor >= 4
+}
+
 func TestDialectIntegration(t *testing.T) {
 	db := openIntegrationDatabase(t).DB
 
@@ -222,34 +235,38 @@ func TestTDengine3Integration(t *testing.T) {
 		t.Fatalf("expected four interpolated points, got %v", interpolated)
 	}
 
-	preparedTable := create.NewTable("device-prepared", true, nil, "select", map[string]interface{}{
-		"location": "prepared",
-		"group":    9,
-	})
-	if err := db.Table("device-prepared").Clauses(create.NewCreateTableClause([]*create.Table{preparedTable})).Create(map[string]interface{}{}).Error; err != nil {
-		t.Fatalf("create prepared subtable: %v", err)
-	}
-	preparedDB, err := gorm.Open(Open(integration.DSN), &gorm.Config{PrepareStmt: true})
-	if err != nil {
-		t.Fatalf("open prepared database: %v", err)
-	}
-	preparedSQLDB, err := preparedDB.DB()
-	if err != nil {
-		t.Fatalf("get prepared connection pool: %v", err)
-	}
-	t.Cleanup(func() { _ = preparedSQLDB.Close() })
-	preparedTimestamp := batchStart.Add(2 * time.Second)
-	if err := preparedDB.Table("device-prepared").Create(map[string]interface{}{
-		"ts": preparedTimestamp, "val": 30.5, "note": "prepared O'Reilly",
-	}).Error; err != nil {
-		t.Fatalf("prepared insert: %v", err)
-	}
-	var prepared measurement
-	if err := preparedDB.Table("select").Where("tbname = ? AND ts = ?", "device-prepared", preparedTimestamp).Take(&prepared).Error; err != nil {
-		t.Fatalf("prepared query: %v", err)
-	}
-	if prepared.Value != 30.5 || prepared.Note != "prepared O'Reilly" {
-		t.Fatalf("unexpected prepared row: %+v", prepared)
+	if supportsPreparedStatements(t, db) {
+		preparedTable := create.NewTable("device-prepared", true, nil, "select", map[string]interface{}{
+			"location": "prepared",
+			"group":    9,
+		})
+		if err := db.Table("device-prepared").Clauses(create.NewCreateTableClause([]*create.Table{preparedTable})).Create(map[string]interface{}{}).Error; err != nil {
+			t.Fatalf("create prepared subtable: %v", err)
+		}
+		preparedDB, err := gorm.Open(Open(integration.DSN), &gorm.Config{PrepareStmt: true})
+		if err != nil {
+			t.Fatalf("open prepared database: %v", err)
+		}
+		preparedSQLDB, err := preparedDB.DB()
+		if err != nil {
+			t.Fatalf("get prepared connection pool: %v", err)
+		}
+		t.Cleanup(func() { _ = preparedSQLDB.Close() })
+		preparedTimestamp := batchStart.Add(2 * time.Second)
+		if err := preparedDB.Table("device-prepared").Create(map[string]interface{}{
+			"ts": preparedTimestamp, "val": 30.5, "note": "prepared O'Reilly",
+		}).Error; err != nil {
+			t.Fatalf("prepared insert: %v", err)
+		}
+		var prepared measurement
+		if err := preparedDB.Table("select").Where("tbname = ? AND ts = ?", "device-prepared", preparedTimestamp).Take(&prepared).Error; err != nil {
+			t.Fatalf("prepared query: %v", err)
+		}
+		if prepared.Value != 30.5 || prepared.Note != "prepared O'Reilly" {
+			t.Fatalf("unexpected prepared row: %+v", prepared)
+		}
+	} else {
+		t.Log("TDengine 3.3.x uses interpolation mode; prepared statement integration requires TDengine 3.4+")
 	}
 
 	deleteEnd := batchStart.Add(2 * time.Second)

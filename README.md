@@ -57,6 +57,8 @@ dsn = dsn + "&interpolateParams=false"
 
 也可以构造 `&tdengine.Dialect{DSN: dsn, BindMode: tdengine.BindModePrepared}` 显式指定模式。
 
+TDengine 3.3.x 建议保持默认参数插值模式。基于当前 `driver-go` 的 Prepared/Stmt2 集成路径以 TDengine 3.4+ 为兼容基线；CI 只在 3.4.x 执行 Prepared Statement 真实服务测试。
+
 ## 超级表与子表
 
 ```go
