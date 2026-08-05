@@ -274,6 +274,34 @@ func TestTDengine3Integration(t *testing.T) {
 		t.Log("TDengine 3.3.x uses interpolation mode; prepared statement integration requires TDengine 3.4+")
 	}
 
+	tdMigrator, ok := db.Migrator().(Migrator)
+	if !ok {
+		t.Fatalf("expected TDengine migrator, got %T", db.Migrator())
+	}
+	if err := tdMigrator.SetTableTags("device-1", map[string]interface{}{
+		"location": "updated-north",
+		"group":    10,
+	}); err != nil {
+		t.Fatalf("update multiple tags: %v", err)
+	}
+	expectedLocation, expectedGroup := "updated-north", 10
+	if serverVersionAtLeast(t, db, 3, 4) {
+		if err := tdMigrator.SetTableTagsBatch(
+			TableTagUpdate{Table: "device-1", Tags: map[string]interface{}{"location": "batch-north", "group": 11}},
+			TableTagUpdate{Table: "device-2", Tags: map[string]interface{}{"location": "batch-south", "group": 12}},
+		); err != nil {
+			t.Fatalf("batch update tags: %v", err)
+		}
+		expectedLocation, expectedGroup = "batch-north", 11
+	}
+	var updatedTags measurement
+	if err := db.Table("select").Where("tbname = ?", "device-1").Take(&updatedTags).Error; err != nil {
+		t.Fatalf("query updated tags: %v", err)
+	}
+	if updatedTags.Location != expectedLocation || updatedTags.Group != expectedGroup {
+		t.Fatalf("unexpected updated tags: %+v", updatedTags)
+	}
+
 	deleteEnd := batchStart.Add(2 * time.Second)
 	if err := DeleteTimeRange(db, "device-1", &batchStart, &deleteEnd).Error; err != nil {
 		t.Fatalf("delete time range: %v", err)
@@ -418,6 +446,38 @@ func TestTDengineMigratorIntegration(t *testing.T) {
 	}
 	if compositeRows != 2 {
 		t.Fatalf("expected 2 composite-key rows, got %d", compositeRows)
+	}
+
+	const optionTable = "option_metrics"
+	optionDefinition := create.NewTable(optionTable, true, []*create.Column{
+		{Name: "ts", ColumnType: create.TimestampType, Encode: create.EncodeDeltaI, Compress: create.CompressLZ4, Level: create.CompressionMedium},
+		{Name: "val", ColumnType: create.DoubleType, Encode: create.EncodeBSS, Compress: create.CompressZstd, Level: create.CompressionHigh},
+	}, "", nil).WithComment("option metrics").WithSMA("val").WithTTL(30)
+	if err := db.Table(optionTable).Clauses(create.NewCreateTableClause([]*create.Table{optionDefinition})).Create(map[string]interface{}{}).Error; err != nil {
+		t.Fatalf("create table with TDengine options: %v", err)
+	}
+	var optionMetadata struct {
+		TTL     int    `gorm:"column:ttl"`
+		Comment string `gorm:"column:table_comment"`
+	}
+	if err := db.Raw(
+		"SELECT ttl, table_comment FROM information_schema.ins_tables WHERE db_name = DATABASE() AND table_name = ?",
+		optionTable,
+	).Scan(&optionMetadata).Error; err != nil {
+		t.Fatalf("query table options: %v", err)
+	}
+	if optionMetadata.TTL != 30 || optionMetadata.Comment != "option metrics" {
+		t.Fatalf("unexpected table options: %+v", optionMetadata)
+	}
+
+	const optionStable = "option_stable"
+	stableDefinition := create.NewSTable(optionStable, true, []*create.Column{
+		{Name: "ts", ColumnType: create.TimestampType},
+		{Name: "val", ColumnType: create.DoubleType},
+	}, []*create.Column{{Name: "location", ColumnType: create.VarcharType, Length: 64}}).
+		WithComment("option stable").WithSMA("val").WithKeep(365, create.RetentionDays)
+	if err := db.Table(optionStable).Clauses(create.NewCreateTableClause([]*create.Table{stableDefinition})).Create(map[string]interface{}{}).Error; err != nil {
+		t.Fatalf("create supertable with TDengine options: %v", err)
 	}
 
 	if serverVersionAtLeast(t, db, 3, 4) {

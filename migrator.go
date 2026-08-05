@@ -481,13 +481,7 @@ func (m Migrator) RenameStableTag(stable, oldName, newName string) error {
 }
 
 func (m Migrator) SetTableTag(table, tag string, value interface{}) error {
-	if err := m.ensurePhysicalTable(table); err != nil {
-		return err
-	}
-	return m.DB.Exec(
-		"ALTER TABLE ? SET TAG ? = ?",
-		clause.Table{Name: table}, clause.Column{Name: tag}, value,
-	).Error
+	return m.SetTableTags(table, map[string]interface{}{tag: value})
 }
 
 func (m Migrator) addTableColumn(table string, column *createclause.Column) error {

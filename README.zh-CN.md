@@ -90,6 +90,24 @@ err = db.Table("device-1").Clauses(using.SetUsingTags(
 
 `SetUsing` 仍接受 `map[string]interface{}`，并会按标签名排序以生成稳定 SQL；需要明确标签顺序时使用 `SetUsingTags`。
 
+TDengine Migrator 支持一次修改一个子表的多个 Tag，也支持批量修改多个子表：
+
+```go
+migrator := db.Migrator().(tdengine.Migrator)
+
+err = migrator.SetTableTags("device-1", map[string]interface{}{
+	"location": "Beijing",
+	"group":    8,
+})
+
+err = migrator.SetTableTagsBatch(
+	tdengine.TableTagUpdate{Table: "device-1", Tags: map[string]interface{}{"group": 9}},
+	tdengine.TableTagUpdate{Table: "device-2", Tags: map[string]interface{}{"group": 10}},
+)
+```
+
+多子表批量修改需要 TDengine 3.4+。Tag 名称会排序，以生成稳定 SQL。
+
 ## 批量写入
 
 直接向 GORM 传入 slice。本方言会生成 TDengine 要求的连续行语法 `VALUES (...) (...)`：
@@ -134,6 +152,31 @@ type DeviceMetric struct {
 TDengine 虚拟表可以正常查询。涉及结构修改的 Migrator 操作会识别虚拟表并返回
 `ErrVirtualTableUnsupported`；管理虚拟表定义时应显式执行 TDengine `VTABLE` SQL。
 
+### 表参数与压缩参数
+
+底层建表 clause 支持 TDengine 表参数和字段级压缩配置：
+
+```go
+table := create.NewTable("metrics", true, []*create.Column{
+	{
+		Name: "ts", ColumnType: create.TimestampType,
+		Encode: create.EncodeDeltaI, Compress: create.CompressLZ4,
+		Level: create.CompressionMedium,
+	},
+	{
+		Name: "value", ColumnType: create.DoubleType,
+		Encode: create.EncodeBSS, Compress: create.CompressZstd,
+		Level: create.CompressionHigh,
+	},
+}, "", nil).
+	WithComment("device metrics").
+	WithSMA("value").
+	WithTTL(30)
+```
+
+普通表和子表使用 `WithTTL`；超级表使用 `WithKeep(value, unit)`，例如
+`WithKeep(365, create.RetentionDays)`。不合法的参数组合或压缩算法会在生成 SQL 时返回明确错误。
+
 ### Tag Index
 
 TDengine 只允许在超级表的单个 Tag 上建立索引。使用标准 GORM index tag 即可参与 `AutoMigrate`：
@@ -171,6 +214,8 @@ DECIMAL 需要 TDengine 3.3.6+，BLOB 和带列过滤的 `COUNT_WINDOW` 需要 T
 ## 更新与删除
 
 TDengine 没有普通行级 `UPDATE`。`db.Update` / `db.Updates` 会返回 `ErrUpdateNotSupported`；更新数据应重新插入相同时间戳。
+
+GORM `ON CONFLICT` clause 会返回 `ErrOnConflictUnsupported`。TDengine 通过时间戳或复合主键的重复写入语义处理冲突，不使用 PostgreSQL 风格的冲突子句。
 
 普通 GORM `Delete` 会返回 `ErrDeleteNotSupported`，避免误发不可逆删除。按时间范围删除时使用：
 

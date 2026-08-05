@@ -24,6 +24,7 @@ type Table struct {
 	Tags        map[string]interface{}
 	Column      []*Column
 	TagColumn   []*Column
+	Options     TableOptions
 }
 
 // NewTable Create new common table
@@ -65,6 +66,9 @@ type Column struct {
 	ColumnType   string
 	Length       uint64
 	CompositeKey bool
+	Encode       Encoding
+	Compress     Compression
+	Level        CompressionLevel
 }
 
 const (
@@ -93,6 +97,10 @@ const (
 // Build renders a TDengine column definition. Implementing clause.Expression
 // also lets the migrator reuse the same definition in ALTER statements.
 func (c *Column) Build(builder clause.Builder) {
+	if err := validateCompression(c); err != nil {
+		builder.AddError(err)
+		return
+	}
 	builder.WriteQuoted(clause.Column{Name: c.Name})
 	builder.WriteByte(' ')
 	builder.WriteString(c.ColumnType)
@@ -103,6 +111,21 @@ func (c *Column) Build(builder clause.Builder) {
 	}
 	if c.CompositeKey {
 		builder.WriteString(" COMPOSITE KEY")
+	}
+	if c.Encode != "" {
+		builder.WriteString(" ENCODE '")
+		builder.WriteString(string(c.Encode))
+		builder.WriteByte('\'')
+	}
+	if c.Compress != "" {
+		builder.WriteString(" COMPRESS '")
+		builder.WriteString(string(c.Compress))
+		builder.WriteByte('\'')
+	}
+	if c.Level != "" {
+		builder.WriteString(" LEVEL '")
+		builder.WriteString(string(c.Level))
+		builder.WriteByte('\'')
 	}
 }
 
@@ -141,6 +164,10 @@ func allSubtables(tables []*Table) bool {
 
 func buildTable(builder clause.Builder, table *Table, writeCommand bool) {
 	if table == nil {
+		return
+	}
+	if err := validateTableOptions(table); err != nil {
+		builder.AddError(err)
 		return
 	}
 	if writeCommand {
@@ -200,6 +227,33 @@ func buildTable(builder clause.Builder, table *Table, writeCommand bool) {
 			}
 		}
 		builder.WriteByte(')')
+	}
+	buildTableOptions(builder, table.Options)
+}
+
+func buildTableOptions(builder clause.Builder, options TableOptions) {
+	if options.Comment != "" {
+		builder.WriteString(" COMMENT ")
+		builder.AddVar(builder, options.Comment)
+	}
+	if len(options.SMA) > 0 {
+		builder.WriteString(" SMA(")
+		for index, column := range options.SMA {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteQuoted(clause.Column{Name: column})
+		}
+		builder.WriteByte(')')
+	}
+	if options.TTL > 0 {
+		builder.WriteString(" TTL ")
+		builder.WriteString(strconv.FormatUint(uint64(options.TTL), 10))
+	}
+	if options.Keep != nil {
+		builder.WriteString(" KEEP ")
+		builder.WriteString(strconv.FormatUint(options.Keep.Value, 10))
+		builder.WriteString(string(options.Keep.Unit))
 	}
 }
 

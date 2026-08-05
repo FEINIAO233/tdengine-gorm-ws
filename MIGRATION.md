@@ -36,6 +36,7 @@ root:taosdata@ws(127.0.0.1:6041)/database?timezone=Asia%2FShanghai
 - 同一个 `CreateTable` clause 中的多个子表会使用 TDengine 批量建表语法。
 - GORM slice 批量写入会生成 TDengine 3.x 的 `VALUES (...) (...)` 语法。
 - 支持 `gorm.Config{PrepareStmt: true}`、`interpolateParams=false` 以及显式 `BindModePrepared`；预编译模式不再预先把字符串转换为 SQL 字面量。
+- GORM `ON CONFLICT` clause 会明确返回 `ErrOnConflictUnsupported`，避免发送 TDengine 不支持的语法。
 
 TDengine 3.3.x 应继续使用默认插值模式；Prepared/Stmt2 真实服务兼容基线为 TDengine 3.4+。
 
@@ -54,6 +55,10 @@ TDengine 3.3.x 应继续使用默认插值模式；Prepared/Stmt2 真实服务�
 超级表标签定义通过 `DESCRIBE` 检测；`INFORMATION_SCHEMA.INS_TAGS` 只用于子表标签值，空超级表不会依赖该视图判断标签是否存在。
 
 类型修改、删除和标签重命名必须通过 `tdengine.Migrator` 的显式方法执行并自行评估数据影响。
+
+新增 `SetTableTags` 和 `SetTableTagsBatch`，分别用于单个子表多 Tag 修改和多个子表批量修改；后者需要 TDengine 3.4+。
+
+底层建表 clause 支持 `COMMENT`、`TTL`、`SMA`、`KEEP` 以及字段级 `ENCODE`、`COMPRESS`、`LEVEL` 参数，并会校验不合法的参数组合。
 
 新增超级表 Tag Index 迁移支持：
 

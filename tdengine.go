@@ -20,6 +20,8 @@ import (
 // DriverName is the default driver name for TDengine.
 const DriverName = "taosWS"
 
+var ErrOnConflictUnsupported = errors.New("tdengine: ON CONFLICT is not supported; insert the same primary key to replace a row")
+
 // BindMode controls how values are passed to driver-go.
 type BindMode uint8
 
@@ -105,6 +107,14 @@ func (dialect Dialect) ClauseBuilders() map[string]clause.ClauseBuilder {
 					}
 				}
 				buildValues(values, builder)
+				return
+			}
+			c.Build(builder)
+		},
+		"ON CONFLICT": func(c clause.Clause, builder clause.Builder) {
+			switch c.Expression.(type) {
+			case clause.OnConflict, *clause.OnConflict:
+				builder.AddError(ErrOnConflictUnsupported)
 				return
 			}
 			c.Build(builder)

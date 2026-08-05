@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func openDryRunDB(t *testing.T, config *gorm.Config) *gorm.DB {
@@ -34,6 +35,15 @@ func TestDeleteIsExplicitlyBlocked(t *testing.T) {
 	result := db.Table("metrics").Where("ts < ?", time.Now()).Delete(map[string]interface{}{})
 	if !errors.Is(result.Error, ErrDeleteNotSupported) {
 		t.Fatalf("expected ErrDeleteNotSupported, got %v", result.Error)
+	}
+}
+
+func TestOnConflictIsExplicitlyBlocked(t *testing.T) {
+	result := openDryRunDB(t, nil).Table("metrics").Clauses(clause.OnConflict{DoNothing: true}).Create(map[string]interface{}{
+		"ts": time.Now(), "val": 1,
+	})
+	if !errors.Is(result.Error, ErrOnConflictUnsupported) {
+		t.Fatalf("expected ErrOnConflictUnsupported, got %v", result.Error)
 	}
 }
 

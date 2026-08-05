@@ -429,3 +429,22 @@ func TestCreateCompositeKey(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS metrics (ts TIMESTAMP,device_id VARCHAR(64) COMPOSITE KEY,value DOUBLE)",
 	}, nil)
 }
+
+func TestCreateTableOptionsAndCompression(t *testing.T) {
+	table := create.NewTable("metrics", true, []*create.Column{
+		{Name: "ts", ColumnType: create.TimestampType, Encode: create.EncodeDeltaI, Compress: create.CompressLZ4, Level: create.CompressionMedium},
+		{Name: "value", ColumnType: create.DoubleType, Encode: create.EncodeBSS, Compress: create.CompressZstd, Level: create.CompressionHigh},
+	}, "", nil).WithComment("device metrics").WithSMA("value").WithTTL(30)
+	tests.CheckBuildClauses(t, []clause.Interface{create.NewCreateTableClause([]*create.Table{table})}, []string{
+		"CREATE TABLE IF NOT EXISTS metrics (ts TIMESTAMP ENCODE 'delta-i' COMPRESS 'lz4' LEVEL 'medium',value DOUBLE ENCODE 'bss' COMPRESS 'zstd' LEVEL 'high') COMMENT ? SMA(value) TTL 30",
+	}, [][][]interface{}{{{"device metrics"}}})
+
+	stable := create.NewSTable("stable_metrics", true, []*create.Column{
+		{Name: "ts", ColumnType: create.TimestampType},
+		{Name: "value", ColumnType: create.DoubleType},
+	}, []*create.Column{{Name: "location", ColumnType: create.VarcharType, Length: 64}}).
+		WithComment("stable metrics").WithSMA("value").WithKeep(365, create.RetentionDays)
+	tests.CheckBuildClauses(t, []clause.Interface{create.NewCreateTableClause([]*create.Table{stable})}, []string{
+		"CREATE STABLE IF NOT EXISTS stable_metrics (ts TIMESTAMP,value DOUBLE) TAGS(location VARCHAR(64)) COMMENT ? SMA(value) KEEP 365d",
+	}, [][][]interface{}{{{"stable metrics"}}})
+}

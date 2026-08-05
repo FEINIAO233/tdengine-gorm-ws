@@ -100,6 +100,26 @@ err = db.Table("device-1").Clauses(using.SetUsingTags(
 `SetUsing` still accepts `map[string]interface{}` and sorts tags by name to
 produce deterministic SQL. Use `SetUsingTags` when tag order must be explicit.
 
+The TDengine migrator can update several tags on one subtable or batch updates
+for several subtables:
+
+```go
+migrator := db.Migrator().(tdengine.Migrator)
+
+err = migrator.SetTableTags("device-1", map[string]interface{}{
+	"location": "Beijing",
+	"group":    8,
+})
+
+err = migrator.SetTableTagsBatch(
+	tdengine.TableTagUpdate{Table: "device-1", Tags: map[string]interface{}{"group": 9}},
+	tdengine.TableTagUpdate{Table: "device-2", Tags: map[string]interface{}{"group": 10}},
+)
+```
+
+Multi-subtable batch updates require TDengine 3.4+. Tag names are sorted to
+produce deterministic SQL.
+
 ## Batch Inserts
 
 Pass a slice directly to GORM. The dialect emits TDengine's consecutive row
@@ -152,6 +172,34 @@ TDengine virtual tables can be queried normally. Schema-changing Migrator
 operations detect virtual tables and return `ErrVirtualTableUnsupported`; use
 explicit TDengine `VTABLE` SQL when managing their definitions.
 
+### Table and Compression Options
+
+The low-level create clause supports TDengine table options and per-column
+compression settings:
+
+```go
+table := create.NewTable("metrics", true, []*create.Column{
+	{
+		Name: "ts", ColumnType: create.TimestampType,
+		Encode: create.EncodeDeltaI, Compress: create.CompressLZ4,
+		Level: create.CompressionMedium,
+	},
+	{
+		Name: "value", ColumnType: create.DoubleType,
+		Encode: create.EncodeBSS, Compress: create.CompressZstd,
+		Level: create.CompressionHigh,
+	},
+}, "", nil).
+	WithComment("device metrics").
+	WithSMA("value").
+	WithTTL(30)
+```
+
+Use `WithTTL` for regular tables and subtables. Supertables use
+`WithKeep(value, unit)`, for example `WithKeep(365, create.RetentionDays)`.
+Invalid option combinations and unsupported compression names return explicit
+errors while SQL is being built.
+
 ### Tag Indexes
 
 TDengine permits an index on a single supertable tag. Standard GORM index tags
@@ -200,6 +248,10 @@ as an interpolated string.
 TDengine does not provide regular row-level `UPDATE`. GORM `Update` and
 `Updates` return `ErrUpdateNotSupported`; update a row by inserting the same
 timestamp again.
+
+GORM `ON CONFLICT` clauses return `ErrOnConflictUnsupported`. TDengine resolves
+duplicate rows through its timestamp or composite-primary-key insertion
+semantics instead of PostgreSQL-style conflict clauses.
 
 Generic GORM `Delete` returns `ErrDeleteNotSupported` to guard against
 irreversible deletes. Use a bounded time range instead:
