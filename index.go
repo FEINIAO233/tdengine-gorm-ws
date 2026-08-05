@@ -68,7 +68,7 @@ func (m Migrator) DropIndex(value interface{}, name string) error {
 		if column != "" {
 			var actualName string
 			if err := m.DB.Raw(
-				"SELECT index_name FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_type = 'tag' OR index_type = 'TAG') AND (index_name = ? OR column_name = ?) LIMIT 1",
+				"SELECT index_name FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_name = ? OR column_name = ?) LIMIT 1",
 				m.CurrentDatabase(), stmt.Table, name, column,
 			).Scan(&actualName).Error; err != nil {
 				return err
@@ -94,10 +94,10 @@ func (m Migrator) HasIndex(value interface{}, name string) bool {
 			}
 		}
 		var count int64
-		query := "SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_type = 'tag' OR index_type = 'TAG') AND index_name = ?"
+		query := "SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND index_name = ?"
 		args := []interface{}{m.CurrentDatabase(), stmt.Table, name}
 		if column != "" {
-			query = "SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_type = 'tag' OR index_type = 'TAG') AND (index_name = ? OR column_name = ?)"
+			query = "SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_name = ? OR column_name = ?)"
 			args = append(args, column)
 		}
 		if err := m.DB.Raw(query, args...).Scan(&count).Error; err != nil {
@@ -113,7 +113,7 @@ func (m Migrator) GetIndexes(value interface{}) (indexes []gorm.Index, err error
 	err = m.RunWithValue(value, func(stmt *gorm.Statement) error {
 		var metadata []indexMetadata
 		if queryErr := m.DB.Raw(
-			"SELECT table_name, index_name, column_name FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_type = 'tag' OR index_type = 'TAG') ORDER BY index_name",
+			"SELECT table_name, index_name, column_name FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? ORDER BY index_name",
 			m.CurrentDatabase(), stmt.Table,
 		).Scan(&metadata).Error; queryErr != nil {
 			return queryErr
@@ -152,7 +152,7 @@ func (m Migrator) createMissingIndexes(value interface{}) error {
 func (m Migrator) hasTagIndex(table, name, column string) (bool, error) {
 	var count int64
 	err := m.DB.Raw(
-		"SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_type = 'tag' OR index_type = 'TAG') AND (index_name = ? OR column_name = ?)",
+		"SELECT count(*) FROM information_schema.ins_indexes WHERE db_name = ? AND table_name = ? AND (index_name = ? OR column_name = ?)",
 		m.CurrentDatabase(), table, name, column,
 	).Scan(&count).Error
 	return count > 0, err

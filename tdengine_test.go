@@ -245,7 +245,7 @@ func TestTDengine3Integration(t *testing.T) {
 		t.Fatalf("prepared insert: %v", err)
 	}
 	var prepared measurement
-	if err := preparedDB.Table("select").Where("tbname = ? AND note = ?", "device-prepared", "prepared O'Reilly").Take(&prepared).Error; err != nil {
+	if err := preparedDB.Table("select").Where("tbname = ? AND ts = ?", "device-prepared", preparedTimestamp).Take(&prepared).Error; err != nil {
 		t.Fatalf("prepared query: %v", err)
 	}
 	if prepared.Value != 30.5 || prepared.Note != "prepared O'Reilly" {
