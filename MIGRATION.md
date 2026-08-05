@@ -48,6 +48,8 @@ TDengine 3.3.x 应继续使用默认插值模式；Prepared/Stmt2 真实服务�
 - 已存在的表只新增缺失的普通列或标签。
 - 不自动删除字段，也不自动修改字段类型。
 - 第一个非标签字段必须是 `TIMESTAMP`。
+- 可使用 `tdengine:"compositeKey"` 将一个整数或 `VARCHAR` 数据字段声明为附加复合主键；该定义只能在首次建表时使用。
+- 虚拟表可以查询，但 Migrator 不会对其生成物理表 DDL，结构变更会返回 `ErrVirtualTableUnsupported`。
 
 超级表标签定义通过 `DESCRIBE` 检测；`INFORMATION_SCHEMA.INS_TAGS` 只用于子表标签值，空超级表不会依赖该视图判断标签是否存在。
 

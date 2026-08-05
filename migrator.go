@@ -15,10 +15,13 @@ import (
 )
 
 var (
-	ErrTimestampFirst         = errors.New("tdengine: the first data column must be TIMESTAMP")
-	ErrNoDataColumns          = errors.New("tdengine: a table requires at least one data column")
-	ErrConstraintsUnsupported = errors.New("tdengine: GORM constraints are not supported")
-	ErrRenameTableUnsupported = errors.New("tdengine: renaming tables through GORM is not supported")
+	ErrTimestampFirst                   = errors.New("tdengine: the first data column must be TIMESTAMP")
+	ErrNoDataColumns                    = errors.New("tdengine: a table requires at least one data column")
+	ErrConstraintsUnsupported           = errors.New("tdengine: GORM constraints are not supported")
+	ErrRenameTableUnsupported           = errors.New("tdengine: renaming tables through GORM is not supported")
+	ErrCompositeKeyInvalid              = errors.New("tdengine: COMPOSITE KEY requires exactly one non-tag integer or VARCHAR column after the timestamp")
+	ErrCompositeKeyMigrationUnsupported = errors.New("tdengine: COMPOSITE KEY can only be declared when creating a table")
+	ErrVirtualTableUnsupported          = errors.New("tdengine: GORM migration operations on virtual tables are not supported")
 )
 
 // Migrator implements the subset of GORM migration operations that maps to
@@ -113,7 +116,15 @@ func (m Migrator) TableType(value interface{}) (result gorm.TableType, err error
 			return queryErr
 		}
 		if stable.Name != "" {
-			result = tdTableType{schema: database, name: stable.Name, typeName: "SUPER TABLE", comment: stable.Comment}
+			typeName := "SUPER TABLE"
+			virtual, virtualErr := m.isVirtualTable(stmt.Table)
+			if virtualErr != nil {
+				return virtualErr
+			}
+			if virtual {
+				typeName = "VIRTUAL SUPER TABLE"
+			}
+			result = tdTableType{schema: database, name: stable.Name, typeName: typeName, comment: stable.Comment}
 			return nil
 		}
 
@@ -227,6 +238,9 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 			if err := validateModelIndexes(stmt.Schema); err != nil {
 				return err
 			}
+			if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+				return err
+			}
 			stable, err := m.isStable(stmt.Table)
 			if err != nil {
 				return err
@@ -236,6 +250,9 @@ func (m Migrator) AutoMigrate(values ...interface{}) error {
 					continue
 				}
 				column := m.columnDefinition(field)
+				if column.CompositeKey {
+					return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, stmt.Table, field.DBName)
+				}
 				if isTagField(field) {
 					if !stable {
 						return fmt.Errorf("tdengine: field %s is a tag but %s is not a supertable", field.Name, stmt.Table)
@@ -271,11 +288,17 @@ func (m Migrator) AddColumn(value interface{}, name string) error {
 		if field.IgnoreMigration {
 			return nil
 		}
+		if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+			return err
+		}
 		stable, err := m.isStable(stmt.Table)
 		if err != nil {
 			return err
 		}
 		column := m.columnDefinition(field)
+		if column.CompositeKey {
+			return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, stmt.Table, field.DBName)
+		}
 		if err := validateColumnPlacement(column, isTagField(field)); err != nil {
 			return err
 		}
@@ -301,6 +324,9 @@ func (m Migrator) DropColumn(value interface{}, name string) error {
 				name = field.DBName
 			}
 		}
+		if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+			return err
+		}
 		stable, err := m.isStable(stmt.Table)
 		if err != nil {
 			return err
@@ -325,11 +351,17 @@ func (m Migrator) AlterColumn(value interface{}, name string) error {
 		if field == nil {
 			return fmt.Errorf("tdengine: failed to look up field %q", name)
 		}
+		if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+			return err
+		}
 		stable, err := m.isStable(stmt.Table)
 		if err != nil {
 			return err
 		}
 		column := m.columnDefinition(field)
+		if column.CompositeKey {
+			return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, stmt.Table, field.DBName)
+		}
 		if stable && isTagField(field) {
 			return m.ModifyStableTag(stmt.Table, column)
 		}
@@ -345,6 +377,9 @@ func (m Migrator) DropTable(values ...interface{}) error {
 	values = m.ReorderModels(values, false)
 	for index := len(values) - 1; index >= 0; index-- {
 		if err := m.RunWithValue(values[index], func(stmt *gorm.Statement) error {
+			if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+				return err
+			}
 			stable, err := m.isStable(stmt.Table)
 			if err != nil {
 				return err
@@ -388,30 +423,57 @@ func (m Migrator) HasConstraint(interface{}, string) bool { return false }
 func (m Migrator) RenameTable(interface{}, interface{}) error { return ErrRenameTableUnsupported }
 
 func (m Migrator) AddStableColumn(stable string, column *createclause.Column) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
+	if column.CompositeKey {
+		return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, stable, column.Name)
+	}
 	return m.DB.Exec("ALTER STABLE ? ADD COLUMN ?", clause.Table{Name: stable}, column).Error
 }
 
 func (m Migrator) DropStableColumn(stable, column string) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
 	return m.DB.Exec("ALTER STABLE ? DROP COLUMN ?", clause.Table{Name: stable}, clause.Column{Name: column}).Error
 }
 
 func (m Migrator) ModifyStableColumn(stable string, column *createclause.Column) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
+	if column.CompositeKey {
+		return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, stable, column.Name)
+	}
 	return m.DB.Exec("ALTER STABLE ? MODIFY COLUMN ?", clause.Table{Name: stable}, column).Error
 }
 
 func (m Migrator) AddStableTag(stable string, tag *createclause.Column) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
 	return m.DB.Exec("ALTER STABLE ? ADD TAG ?", clause.Table{Name: stable}, tag).Error
 }
 
 func (m Migrator) DropStableTag(stable, tag string) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
 	return m.DB.Exec("ALTER STABLE ? DROP TAG ?", clause.Table{Name: stable}, clause.Column{Name: tag}).Error
 }
 
 func (m Migrator) ModifyStableTag(stable string, tag *createclause.Column) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
 	return m.DB.Exec("ALTER STABLE ? MODIFY TAG ?", clause.Table{Name: stable}, tag).Error
 }
 
 func (m Migrator) RenameStableTag(stable, oldName, newName string) error {
+	if err := m.ensurePhysicalTable(stable); err != nil {
+		return err
+	}
 	return m.DB.Exec(
 		"ALTER STABLE ? RENAME TAG ? ?",
 		clause.Table{Name: stable}, clause.Column{Name: oldName}, clause.Column{Name: newName},
@@ -419,6 +481,9 @@ func (m Migrator) RenameStableTag(stable, oldName, newName string) error {
 }
 
 func (m Migrator) SetTableTag(table, tag string, value interface{}) error {
+	if err := m.ensurePhysicalTable(table); err != nil {
+		return err
+	}
 	return m.DB.Exec(
 		"ALTER TABLE ? SET TAG ? = ?",
 		clause.Table{Name: table}, clause.Column{Name: tag}, value,
@@ -426,7 +491,47 @@ func (m Migrator) SetTableTag(table, tag string, value interface{}) error {
 }
 
 func (m Migrator) addTableColumn(table string, column *createclause.Column) error {
+	if err := m.ensurePhysicalTable(table); err != nil {
+		return err
+	}
+	if column.CompositeKey {
+		return fmt.Errorf("%w: %s.%s", ErrCompositeKeyMigrationUnsupported, table, column.Name)
+	}
 	return m.DB.Exec("ALTER TABLE ? ADD COLUMN ?", clause.Table{Name: table}, column).Error
+}
+
+func (m Migrator) ensurePhysicalTable(table string) error {
+	virtual, err := m.isVirtualTable(table)
+	if err != nil {
+		return err
+	}
+	if virtual {
+		return fmt.Errorf("%w: %s", ErrVirtualTableUnsupported, table)
+	}
+	return nil
+}
+
+func (m Migrator) isVirtualTable(table string) (bool, error) {
+	var tableType string
+	if err := m.DB.Raw(
+		"SELECT type FROM information_schema.ins_tables WHERE db_name = ? AND table_name = ? LIMIT 1",
+		m.CurrentDatabase(), table,
+	).Scan(&tableType).Error; err != nil {
+		return false, err
+	}
+	if tableType == "" {
+		if err := m.DB.Raw(
+			"SELECT table_type FROM information_schema.ins_columns WHERE db_name = ? AND table_name = ? LIMIT 1",
+			m.CurrentDatabase(), table,
+		).Scan(&tableType).Error; err != nil {
+			return false, err
+		}
+	}
+	return isVirtualTableType(tableType), nil
+}
+
+func isVirtualTableType(tableType string) bool {
+	return strings.Contains(strings.ToUpper(strings.TrimSpace(tableType)), "VIRTUAL")
 }
 
 func (m Migrator) isStable(table string) (bool, error) {
@@ -454,12 +559,20 @@ func (m Migrator) modelColumns(model *schema.Schema) (columns, tags []*createcla
 }
 
 func (m Migrator) columnDefinition(field *schema.Field) *createclause.Column {
-	return &createclause.Column{Name: field.DBName, ColumnType: m.d.DataTypeOf(field)}
+	return &createclause.Column{
+		Name:         field.DBName,
+		ColumnType:   m.d.DataTypeOf(field),
+		CompositeKey: hasTDengineOption(field, "compositekey"),
+	}
 }
 
 func isTagField(field *schema.Field) bool {
+	return hasTDengineOption(field, "tag")
+}
+
+func hasTDengineOption(field *schema.Field, expected string) bool {
 	for _, option := range strings.Split(field.StructField.Tag.Get("tdengine"), ",") {
-		if strings.EqualFold(strings.TrimSpace(option), "tag") {
+		if strings.EqualFold(strings.TrimSpace(option), expected) {
 			return true
 		}
 	}
@@ -481,11 +594,18 @@ func validateModelColumns(columns, tags []*createclause.Column) error {
 		return err
 	}
 	blobCount := 0
-	for _, column := range columns {
+	compositeKeyCount := 0
+	for index, column := range columns {
 		if err := validateColumnPlacement(column, false); err != nil {
 			return err
 		}
 		typeName := baseDataType(column.ColumnType)
+		if column.CompositeKey {
+			compositeKeyCount++
+			if index == 0 || !supportsCompositeKey(typeName) {
+				return fmt.Errorf("%w: %s", ErrCompositeKeyInvalid, column.Name)
+			}
+		}
 		if typeName == createclause.BlobType {
 			blobCount++
 		}
@@ -494,6 +614,9 @@ func validateModelColumns(columns, tags []*createclause.Column) error {
 		return errors.New("tdengine: only one BLOB column is allowed per table")
 	}
 	for _, tag := range tags {
+		if tag.CompositeKey {
+			return fmt.Errorf("%w: tag %s", ErrCompositeKeyInvalid, tag.Name)
+		}
 		if err := validateColumnPlacement(tag, true); err != nil {
 			return err
 		}
@@ -501,7 +624,21 @@ func validateModelColumns(columns, tags []*createclause.Column) error {
 	if len(tags) > 128 {
 		return errors.New("tdengine: a supertable supports at most 128 tags")
 	}
+	if compositeKeyCount > 1 {
+		return ErrCompositeKeyInvalid
+	}
 	return nil
+}
+
+func supportsCompositeKey(typeName string) bool {
+	switch typeName {
+	case createclause.TinyIntType, createclause.SmallIntType, createclause.IntType, createclause.BigIntType,
+		createclause.UTinyIntType, createclause.USmallIntType, createclause.UIntType, createclause.UBigIntType,
+		createclause.VarcharType:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateColumnPlacement(column *createclause.Column, tag bool) error {

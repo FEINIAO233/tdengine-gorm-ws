@@ -2,6 +2,7 @@ package create_test
 
 import (
 	"fmt"
+
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/create"
 	"github.com/FEINIAO233/tdengine-gorm-ws/clause/tests"
 	"testing"
@@ -410,4 +411,21 @@ func TestCreateMultipleSubtables(t *testing.T) {
 	tests.CheckBuildClauses(t, []clause.Interface{createClause}, []string{
 		"CREATE TABLE IF NOT EXISTS t_1 USING st_1(tag) TAGS (?) IF NOT EXISTS t_2 USING st_1(tag) TAGS (?)",
 	}, [][][]interface{}{{{1, 2}}})
+}
+
+func TestCreateCompositeKey(t *testing.T) {
+	createClause := create.NewCreateTableClause([]*create.Table{create.NewTable(
+		"metrics",
+		true,
+		[]*create.Column{
+			{Name: "ts", ColumnType: create.TimestampType},
+			{Name: "device_id", ColumnType: create.VarcharType, Length: 64, CompositeKey: true},
+			{Name: "value", ColumnType: create.DoubleType},
+		},
+		"",
+		nil,
+	)})
+	tests.CheckBuildClauses(t, []clause.Interface{createClause}, []string{
+		"CREATE TABLE IF NOT EXISTS metrics (ts TIMESTAMP,device_id VARCHAR(64) COMPOSITE KEY,value DOUBLE)",
+	}, nil)
 }

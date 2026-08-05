@@ -61,9 +61,10 @@ func (c CreateTable) AddTables(tables ...*Table) CreateTable {
 }
 
 type Column struct {
-	Name       string
-	ColumnType string
-	Length     uint64
+	Name         string
+	ColumnType   string
+	Length       uint64
+	CompositeKey bool
 }
 
 const (
@@ -99,6 +100,9 @@ func (c *Column) Build(builder clause.Builder) {
 		builder.WriteByte('(')
 		builder.WriteString(strconv.FormatUint(c.Length, 10))
 		builder.WriteByte(')')
+	}
+	if c.CompositeKey {
+		builder.WriteString(" COMPOSITE KEY")
 	}
 }
 

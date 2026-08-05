@@ -34,6 +34,23 @@ type invalidDecimalTagModel struct {
 	Price string `gorm:"type:DECIMAL;precision:18;scale:2" tdengine:"tag"`
 }
 
+type compositeKeyModel struct {
+	TS       time.Time
+	DeviceID string `gorm:"type:VARCHAR;size:64" tdengine:"compositeKey"`
+	Value    float64
+}
+
+type invalidCompositeKeyTypeModel struct {
+	TS    time.Time
+	Value float64 `tdengine:"compositeKey"`
+}
+
+type duplicateCompositeKeyModel struct {
+	TS       time.Time
+	DeviceID string `gorm:"type:VARCHAR;size:64" tdengine:"compositeKey"`
+	Sequence int    `tdengine:"compositeKey"`
+}
+
 func TestMigratorRequiresTimestampFirst(t *testing.T) {
 	db := openDryRunDB(t, nil)
 	err := db.Table("invalid_metrics").Migrator().CreateTable(&invalidMigrationModel{})
@@ -73,6 +90,43 @@ func TestExtendedTypeValidation(t *testing.T) {
 	for _, model := range []interface{}{&invalidJSONColumnModel{}, &invalidDecimalTagModel{}} {
 		if err := db.Table("invalid_types").Migrator().CreateTable(model); err == nil {
 			t.Fatalf("expected TDengine type validation to reject %T", model)
+		}
+	}
+}
+
+func TestCompositeKeyValidation(t *testing.T) {
+	db := openDryRunDB(t, nil)
+	for _, test := range []struct {
+		model interface{}
+		err   error
+	}{
+		{model: &compositeKeyModel{}},
+		{model: &invalidCompositeKeyTypeModel{}, err: ErrCompositeKeyInvalid},
+		{model: &duplicateCompositeKeyModel{}, err: ErrCompositeKeyInvalid},
+	} {
+		stmt := &gorm.Statement{DB: db}
+		if err := stmt.Parse(test.model); err != nil {
+			t.Fatalf("parse composite key model: %v", err)
+		}
+		columns, tags := (Migrator{d: Dialect{}}).modelColumns(stmt.Schema)
+		err := validateModelColumns(columns, tags)
+		if !errors.Is(err, test.err) {
+			t.Fatalf("%T: expected %v, got %v", test.model, test.err, err)
+		}
+	}
+}
+
+func TestVirtualTableTypeDetection(t *testing.T) {
+	for tableType, expected := range map[string]bool{
+		"NORMAL_TABLE":         false,
+		"CHILD_TABLE":          false,
+		"SUPER_TABLE":          false,
+		"VIRTUAL_NORMAL_TABLE": true,
+		"VIRTUAL_CHILD_TABLE":  true,
+		"virtual super table":  true,
+	} {
+		if actual := isVirtualTableType(tableType); actual != expected {
+			t.Fatalf("%q: expected %v, got %v", tableType, expected, actual)
 		}
 	}
 }

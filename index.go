@@ -36,6 +36,9 @@ type indexMetadata struct {
 
 func (m Migrator) CreateIndex(value interface{}, name string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+			return err
+		}
 		index, err := m.tagIndex(stmt, name)
 		if err != nil {
 			return err
@@ -56,6 +59,9 @@ func (m Migrator) CreateIndex(value interface{}, name string) error {
 
 func (m Migrator) DropIndex(value interface{}, name string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		if err := m.ensurePhysicalTable(stmt.Table); err != nil {
+			return err
+		}
 		column := ""
 		if stmt.Schema != nil {
 			if index := stmt.Schema.LookIndex(name); index != nil {

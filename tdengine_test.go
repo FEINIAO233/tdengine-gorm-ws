@@ -3,6 +3,7 @@ package tdengine_gorm
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -76,6 +77,10 @@ func openIntegrationDatabase(t *testing.T) integrationDatabase {
 }
 
 func supportsPreparedStatements(t *testing.T, db *gorm.DB) bool {
+	return serverVersionAtLeast(t, db, 3, 4)
+}
+
+func serverVersionAtLeast(t *testing.T, db *gorm.DB, wantMajor, wantMinor int) bool {
 	t.Helper()
 	var version string
 	if err := db.Raw("SELECT SERVER_VERSION()").Scan(&version).Error; err != nil {
@@ -85,7 +90,7 @@ func supportsPreparedStatements(t *testing.T, db *gorm.DB) bool {
 	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
 		t.Fatalf("parse TDengine server version %q: %v", version, err)
 	}
-	return major > 3 || major == 3 && minor >= 4
+	return major > wantMajor || major == wantMajor && minor >= wantMinor
 }
 
 func TestDialectIntegration(t *testing.T) {
@@ -306,6 +311,18 @@ type plainMetricV2 struct {
 	Note  string    `gorm:"column:note;type:NCHAR(64)"`
 }
 
+type compositeMetric struct {
+	TS       time.Time `gorm:"column:ts"`
+	DeviceID string    `gorm:"column:device_id;type:VARCHAR;size:64" tdengine:"compositeKey"`
+	Value    float64   `gorm:"column:val"`
+}
+
+type plainMetricWithCompositeKey struct {
+	TS       time.Time `gorm:"column:ts"`
+	Value    float64   `gorm:"column:val"`
+	DeviceID string    `gorm:"column:device_id;type:VARCHAR;size:64" tdengine:"compositeKey"`
+}
+
 func TestTDengineMigratorIntegration(t *testing.T) {
 	db := openIntegrationDatabase(t).DB
 	const stableName = "auto_metrics"
@@ -379,6 +396,41 @@ func TestTDengineMigratorIntegration(t *testing.T) {
 	}
 	if !db.Migrator().HasTable(plainTable) || !db.Migrator().HasColumn(plainTable, "note") {
 		t.Fatal("expected regular table and added column in metadata")
+	}
+	if err := db.Table(plainTable).AutoMigrate(&plainMetricWithCompositeKey{}); !errors.Is(err, ErrCompositeKeyMigrationUnsupported) {
+		t.Fatalf("expected existing table composite-key migration to be rejected, got %v", err)
+	}
+
+	const compositeTable = "composite_metrics"
+	if err := db.Table(compositeTable).AutoMigrate(&compositeMetric{}); err != nil {
+		t.Fatalf("create composite-key table with AutoMigrate: %v", err)
+	}
+	sharedTimestamp := time.Now().UTC().Truncate(time.Millisecond)
+	if err := db.Table(compositeTable).Create([]compositeMetric{
+		{TS: sharedTimestamp, DeviceID: "device-1", Value: 1},
+		{TS: sharedTimestamp, DeviceID: "device-2", Value: 2},
+	}).Error; err != nil {
+		t.Fatalf("insert rows sharing a timestamp into composite-key table: %v", err)
+	}
+	var compositeRows int64
+	if err := db.Table(compositeTable).Count(&compositeRows).Error; err != nil {
+		t.Fatalf("count composite-key rows: %v", err)
+	}
+	if compositeRows != 2 {
+		t.Fatalf("expected 2 composite-key rows, got %d", compositeRows)
+	}
+
+	if serverVersionAtLeast(t, db, 3, 4) {
+		const virtualTable = "virtual_metrics"
+		if err := db.Exec(
+			"CREATE VTABLE " + virtualTable + " (ts TIMESTAMP, val DOUBLE FROM " + plainTable + ".val)",
+		).Error; err != nil {
+			t.Fatalf("create virtual table for migration guard: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Exec("DROP VTABLE IF EXISTS " + virtualTable).Error })
+		if err := db.Migrator().DropTable(virtualTable); !errors.Is(err, ErrVirtualTableUnsupported) {
+			t.Fatalf("expected virtual-table migration to be rejected, got %v", err)
+		}
 	}
 
 	tables, err := db.Migrator().GetTables()

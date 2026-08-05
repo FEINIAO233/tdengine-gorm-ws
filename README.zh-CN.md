@@ -10,7 +10,7 @@
 - Go 1.18+
 - GORM 1.31.x
 - `driver-go/v3` 3.8.x
-- TDengine 3.3.6+（CI 覆盖 3.3.8.8 和 3.4.1.6）
+- TDengine 3.3.6+（CI 覆盖 3.3.8.8、3.4.1.6 和 3.4.2.2）
 
 当前不支持事务和普通 SQL `UPDATE`。支持安全的增量自动迁移、批量写入和受时间范围保护的删除；超级表、子表以及 TDengine 查询扩展通过本库提供的 clauses 使用。
 
@@ -115,7 +115,24 @@ type Meter struct {
 err := db.Table("meters").AutoMigrate(&Meter{})
 ```
 
+TDengine 可以使用时间戳和另一个整数或 `VARCHAR` 字段组成复合主键。使用
+`tdengine:"compositeKey"` 显式标记第二个字段：
+
+```go
+type DeviceMetric struct {
+	TS       time.Time
+	DeviceID string `gorm:"type:VARCHAR;size:64" tdengine:"compositeKey"`
+	Value    float64
+}
+```
+
+复合主键只能在首次建表时声明。对已有表执行 `AutoMigrate` 时，本库会返回
+`ErrCompositeKeyMigrationUnsupported`，不会尝试修改已有主键。
+
 对已有定义执行显式 DDL 时，可将 `db.Migrator()` 断言为 `tdengine.Migrator`，使用 `AddStableColumn`、`AddStableTag`、`ModifyStableTag`、`RenameStableTag` 等方法。
+
+TDengine 虚拟表可以正常查询。涉及结构修改的 Migrator 操作会识别虚拟表并返回
+`ErrVirtualTableUnsupported`；管理虚拟表定义时应显式执行 TDengine `VTABLE` SQL。
 
 ### Tag Index
 
@@ -188,4 +205,4 @@ $env:TDENGINE_GORM_TEST_ENDPOINT='root:taosdata@ws(127.0.0.1:6041)'
 go test -v -count=1 -run 'Integration$' .
 ```
 
-测试会创建临时数据库，并在结束时自动删除。GitHub Actions 会使用 TDengine 3.3.8.8 和 3.4.1.6 执行同一套测试。
+测试会创建临时数据库，并在结束时自动删除。GitHub Actions 会使用 TDengine 3.3.8.8、3.4.1.6 和 3.4.2.2 执行同一套测试。

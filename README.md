@@ -11,7 +11,7 @@ client.
 - Go 1.18+
 - GORM 1.31.x
 - `driver-go/v3` 3.8.x
-- TDengine 3.3.6+ (CI covers 3.3.8.8 and 3.4.1.6)
+- TDengine 3.3.6+ (CI covers 3.3.8.8, 3.4.1.6, and 3.4.2.2)
 
 Transactions and regular SQL `UPDATE` statements are not supported. The
 dialect supports safe additive migrations, batch inserts, guarded time-range
@@ -129,9 +129,28 @@ type Meter struct {
 err := db.Table("meters").AutoMigrate(&Meter{})
 ```
 
+TDengine can combine the timestamp key with one additional integer or
+`VARCHAR` column. Mark that field explicitly with `tdengine:"compositeKey"`:
+
+```go
+type DeviceMetric struct {
+	TS       time.Time
+	DeviceID string `gorm:"type:VARCHAR;size:64" tdengine:"compositeKey"`
+	Value    float64
+}
+```
+
+A composite key can only be declared when the table is first created.
+`AutoMigrate` returns `ErrCompositeKeyMigrationUnsupported` instead of trying
+to add one to an existing table.
+
 For explicit DDL changes, assert `db.Migrator()` to `tdengine.Migrator` and use
 methods such as `AddStableColumn`, `AddStableTag`, `ModifyStableTag`, and
 `RenameStableTag`.
+
+TDengine virtual tables can be queried normally. Schema-changing Migrator
+operations detect virtual tables and return `ErrVirtualTableUnsupported`; use
+explicit TDengine `VTABLE` SQL when managing their definitions.
 
 ### Tag Indexes
 
@@ -219,4 +238,4 @@ go test -v -count=1 -run 'Integration$' .
 ```
 
 The tests create and remove temporary databases automatically. GitHub Actions
-runs the same suite against TDengine 3.3.8.8 and 3.4.1.6.
+runs the same suite against TDengine 3.3.8.8, 3.4.1.6, and 3.4.2.2.

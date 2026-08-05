@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tdengine-version: ["3.3.8.8", "3.4.1.6"]
+        tdengine-version: ["3.3.8.8", "3.4.1.6", "3.4.2.2"]
     services:
       tdengine:
         image: tdengine/tsdb:${{ matrix.tdengine-version }}
@@ -30,7 +30,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
           cache: true
 
       - name: Run TDengine integration tests
